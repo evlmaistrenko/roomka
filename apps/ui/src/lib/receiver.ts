@@ -1,6 +1,6 @@
 import { AUDIO_CODEC } from './config'
 import { decrypt, getKey } from './e2ee'
-import { AUDIO_CONFIG_PREFIX, readCodec, Reassembler } from './protocol'
+import { AUDIO_CONFIG_PREFIX, frameAad, readCodec, Reassembler } from './protocol'
 
 export type VideoFrameHandler = (senderId: number, frame: VideoFrame) => void
 export type AudioDataHandler = (senderId: number, data: AudioData) => void
@@ -27,21 +27,34 @@ export function startReceiving(
   // Codec each sender's video decoder is currently configured for (from the
   // codec tag on that sender's keyframes). Absent = not yet configured.
   const videoCodecs = new Map<number, string>()
+  // `${sampleRate}:${channels}` each sender's audio decoder is configured for,
+  // so a mid-stream format change triggers a reconfigure rather than decoding
+  // against the stale first-packet format.
+  const audioConfigs = new Map<number, string>()
 
   const videoDecoderFor = (senderId: number): VideoDecoder => {
     let decoder = videoDecoders.get(senderId)
     if (!decoder) {
       decoder = new VideoDecoder({
         output: (frame) => onVideoFrame(senderId, frame),
-        error: (error) => console.error('video decoder error', error),
+        // A fatal decoder error (corrupt bitstream, unsupported frame) leaves
+        // the decoder closed. Drop it so this sender gets a fresh decoder on its
+        // next keyframe, instead of wedging playback for everyone. Clearing the
+        // codec entry forces reconfiguration and makes deltas wait for a key.
+        error: (error) => {
+          console.error('video decoder error', error)
+          videoDecoders.delete(senderId)
+          videoCodecs.delete(senderId)
+        },
       })
       videoDecoders.set(senderId, decoder)
     }
     return decoder
   }
 
-  // Configured lazily from the sample rate + channels prefixed on the first
-  // audio packet, so the decoder matches the source format.
+  // Configured from the sample rate + channels prefixed on each audio packet,
+  // so the decoder matches the source format — and reconfigured if that format
+  // changes mid-stream.
   const audioDecoderFor = (
     senderId: number,
     sampleRate: number,
@@ -51,14 +64,25 @@ export function startReceiving(
     if (!decoder) {
       decoder = new AudioDecoder({
         output: (data) => onAudioData(senderId, data),
-        error: (error) => console.error('audio decoder error', error),
+        // Drop a failed decoder so the next audio packet (each carries its own
+        // format prefix) recreates and reconfigures it, rather than killing the
+        // receive loop.
+        error: (error) => {
+          console.error('audio decoder error', error)
+          audioDecoders.delete(senderId)
+          audioConfigs.delete(senderId)
+        },
       })
+      audioDecoders.set(senderId, decoder)
+    }
+    const config = `${sampleRate}:${channels}`
+    if (audioConfigs.get(senderId) !== config) {
       decoder.configure({
         codec: AUDIO_CODEC,
         sampleRate,
         numberOfChannels: channels,
       })
-      audioDecoders.set(senderId, decoder)
+      audioConfigs.set(senderId, config)
     }
     return decoder
   }
@@ -72,53 +96,67 @@ export function startReceiving(
       if (done) break
       if (!value) continue
 
-      const frame = reassembler.push(value)
-      if (!frame) continue
+      // Isolate every datagram: a malformed frame (a too-short datagram, a
+      // decoder that throws InvalidStateError after going closed, a bad audio
+      // format) must drop only that frame, never tear down reception from every
+      // sender. The read() itself stays outside — its rejection ends the loop.
+      try {
+        const frame = reassembler.push(value)
+        if (!frame) continue
 
-      // The payload is E2EE ciphertext; decrypt before decoding. Sustained
-      // auth failures on complete frames signal a wrong key — report it once.
-      const data = await decrypt(key, frame.data)
-      if (!data) {
-        if (++decryptFailures === DECRYPT_FAILURE_LIMIT) onDecryptFailure()
-        continue
-      }
-      decryptFailures = 0
+        // The payload is E2EE ciphertext; decrypt before decoding. The frame's
+        // metadata is bound as AAD, so a relay that tampered with the header
+        // fails auth here. Sustained auth failures on complete frames signal a
+        // wrong key — report it once.
+        const data = await decrypt(key, frame.data, frameAad(frame))
+        if (!data) {
+          if (++decryptFailures === DECRYPT_FAILURE_LIMIT) onDecryptFailure()
+          continue
+        }
+        decryptFailures = 0
 
-      if (frame.audio) {
-        const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-        const sampleRate = view.getUint32(0, true)
-        const channels = view.getUint8(4)
-        audioDecoderFor(frame.senderId, sampleRate, channels).decode(
-          new EncodedAudioChunk({
-            type: 'key',
+        if (frame.audio) {
+          const view = new DataView(
+            data.buffer,
+            data.byteOffset,
+            data.byteLength,
+          )
+          const sampleRate = view.getUint32(0, true)
+          const channels = view.getUint8(4)
+          audioDecoderFor(frame.senderId, sampleRate, channels).decode(
+            new EncodedAudioChunk({
+              type: 'key',
+              timestamp: frame.timestamp,
+              data: data.subarray(AUDIO_CONFIG_PREFIX),
+            }),
+          )
+          continue
+        }
+
+        // Keyframes carry a codec tag; configure (or reconfigure, if the sender
+        // switched codecs) the decoder from it, then decode the stripped chunk.
+        // Deltas are only decodable once a keyframe has configured the decoder.
+        let chunk = data
+        if (frame.keyframe) {
+          const tagged = readCodec(data)
+          chunk = tagged.chunk
+          if (videoCodecs.get(frame.senderId) !== tagged.codec) {
+            videoDecoderFor(frame.senderId).configure({ codec: tagged.codec })
+            videoCodecs.set(frame.senderId, tagged.codec)
+          }
+        } else if (!videoCodecs.has(frame.senderId)) {
+          continue // no keyframe seen yet — can't decode deltas
+        }
+        videoDecoderFor(frame.senderId).decode(
+          new EncodedVideoChunk({
+            type: frame.keyframe ? 'key' : 'delta',
             timestamp: frame.timestamp,
-            data: data.subarray(AUDIO_CONFIG_PREFIX),
+            data: chunk,
           }),
         )
-        continue
+      } catch (error) {
+        console.error('dropped datagram', error)
       }
-
-      // Keyframes carry a codec tag; configure (or reconfigure, if the sender
-      // switched codecs) the decoder from it, then decode the stripped chunk.
-      // Deltas are only decodable once a keyframe has configured the decoder.
-      let chunk = data
-      if (frame.keyframe) {
-        const tagged = readCodec(data)
-        chunk = tagged.chunk
-        if (videoCodecs.get(frame.senderId) !== tagged.codec) {
-          videoDecoderFor(frame.senderId).configure({ codec: tagged.codec })
-          videoCodecs.set(frame.senderId, tagged.codec)
-        }
-      } else if (!videoCodecs.has(frame.senderId)) {
-        continue // no keyframe seen yet — can't decode deltas
-      }
-      videoDecoderFor(frame.senderId).decode(
-        new EncodedVideoChunk({
-          type: frame.keyframe ? 'key' : 'delta',
-          timestamp: frame.timestamp,
-          data: chunk,
-        }),
-      )
     }
   }
   void pump().catch((error: unknown) => console.error('receiver stopped', error))

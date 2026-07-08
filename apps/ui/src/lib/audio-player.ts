@@ -9,6 +9,10 @@ export class AudioPlayer {
   private enabled = false
   private nextStartTime = 0
   private static readonly JITTER_LEAD = 0.06 // seconds
+  // Max the schedule may run ahead of the clock before we drop to catch up.
+  // Without this, packets arriving slightly faster than realtime would push
+  // nextStartTime ever further ahead and latency would grow without bound.
+  private static readonly MAX_LEAD = 0.5 // seconds
 
   constructor() {
     this.gain.connect(this.context.destination)
@@ -19,6 +23,15 @@ export class AudioPlayer {
     // "running" if the tab already has user activation, which would otherwise
     // play audio before the tile's Play button is pressed.
     if (!this.enabled) {
+      data.close()
+      return
+    }
+
+    const now = this.context.currentTime
+    // Buffered too far ahead (arriving faster than realtime): drop this packet
+    // so latency stays bounded. Already-queued audio keeps playing seamlessly;
+    // we just stop extending the schedule until the clock catches up.
+    if (this.nextStartTime - now > AudioPlayer.MAX_LEAD) {
       data.close()
       return
     }
@@ -40,8 +53,8 @@ export class AudioPlayer {
     source.buffer = buffer
     source.connect(this.gain)
 
-    const now = this.context.currentTime
     if (this.nextStartTime < now) {
+      // Underrun/gap: restart a small lead ahead of the clock.
       this.nextStartTime = now + AudioPlayer.JITTER_LEAD
     }
     source.start(this.nextStartTime)

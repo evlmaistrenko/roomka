@@ -7,6 +7,12 @@ package config
 
 import "os"
 
+// DevJWTSecret is the well-known placeholder secret used only in development
+// (when ROOMKA_BROADCAST_JWT_SECRET is unset and no production certs are
+// configured). It is intentionally public — production must never use it, and
+// main refuses to start if it is in effect while serving real certificates.
+const DevJWTSecret = "roomka-dev-jwt-secret-change-in-production"
+
 // Config holds every runtime parameter of the broadcast server.
 type Config struct {
 	Port            string // UDP/QUIC port for WebTransport; bound on all interfaces
@@ -25,8 +31,10 @@ func Load() Config {
 		CertPath:        env("ROOMKA_BROADCAST_CERT_PATH", ""),
 		CertKeyPath:     env("ROOMKA_BROADCAST_CERT_KEY_PATH", ""),
 		DevCertHashPort: env("ROOMKA_BROADCAST_DEV_CERT_HASH_PORT", "8080"),
-		// A dev placeholder (like the self-signed cert): override in production.
-		JWTSecret: env("ROOMKA_BROADCAST_JWT_SECRET", "roomka-dev-jwt-secret-change-in-production"),
+		// No default: production must set a strong secret, and dev falls back to
+		// DevJWTSecret explicitly (see main). An empty value here is the signal
+		// that nothing was configured.
+		JWTSecret: env("ROOMKA_BROADCAST_JWT_SECRET", ""),
 	}
 }
 

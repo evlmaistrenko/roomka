@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>roomka</title>
+    <script>
+      // Apply the theme class before first paint so dark-mode users don't see a
+      // white flash (the React ThemeProvider only runs after mount). Mirrors the
+      // key/logic in components/theme-provider.tsx — keep the two in sync.
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('roomka-theme')
+          var theme = stored === 'light' || stored === 'dark' ? stored : 'system'
+          var dark =
+            theme === 'dark' ||
+            (theme === 'system' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          if (dark) document.documentElement.classList.add('dark')
+        } catch (e) {
+          /* localStorage unavailable — fall back to the default light theme */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Maximize,
   Minimize,
@@ -49,6 +49,10 @@ function App() {
     setPresetId(id)
     localStorage.setItem(PRESET_STORAGE_KEY, id)
   }
+
+  // Stable identity so SettingsDialog's Escape/focus-trap effects don't tear
+  // down and re-subscribe on every App re-render while the dialog is open.
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
 
   const streamFor = (id: TileId): MediaStream | null =>
     id === 'local' ? localStream : getStream(id)
@@ -137,7 +141,7 @@ function App() {
         open={settingsOpen}
         presetId={presetId}
         onSelect={selectPreset}
-        onClose={() => setSettingsOpen(false)}
+        onClose={closeSettings}
       />
     </div>
   )

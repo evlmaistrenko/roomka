@@ -40,10 +40,10 @@ func TestVerify(t *testing.T) {
 		want  error
 	}{
 		{"valid with exp", token(t, map[string]any{"exp": now + 3600}, testSecret), nil},
-		{"valid empty payload", token(t, map[string]any{}, testSecret), nil},
+		{"missing exp rejected", token(t, map[string]any{}, testSecret), ErrNoExpiry},
 		{"wrong secret", token(t, map[string]any{"exp": now + 3600}, "other"), ErrSignature},
 		{"expired", token(t, map[string]any{"exp": now - 1}, testSecret), ErrExpired},
-		{"not yet valid", token(t, map[string]any{"nbf": now + 3600}, testSecret), ErrNotYet},
+		{"not yet valid", token(t, map[string]any{"nbf": now + 3600, "exp": now + 7200}, testSecret), ErrNotYet},
 		{"alg none", sign(`{"alg":"none"}`, `{}`, testSecret), ErrAlgorithm},
 		{"missing parts", "a.b", ErrMalformed},
 		{"garbage segments", "!.!.!", ErrMalformed},

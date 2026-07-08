@@ -140,7 +140,10 @@ export function useBroadcast() {
     try {
       const maxDatagramSize = transport.datagrams.maxDatagramSize || 1200
       const share = await startShare(
-        (datagram) => void writer.write(datagram),
+        // Datagram delivery is best-effort; a write rejects when the transport
+        // closes (e.g. on stop/unmount). Swallow it so a closing transport
+        // doesn't spray unhandled rejections — real failures surface elsewhere.
+        (datagram) => void writer.write(datagram).catch(() => {}),
         senderIdRef.current,
         maxDatagramSize,
         preset,

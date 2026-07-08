@@ -3,6 +3,7 @@ import { encrypt, getKey } from './e2ee'
 import {
   AUDIO_CONFIG_PREFIX,
   fragment,
+  frameAad,
   withCodec,
   type FrameMeta,
 } from './protocol'
@@ -65,7 +66,7 @@ function makeSender(
   return (meta: FrameMeta, plaintext: Uint8Array) => {
     chain = chain
       .then(async () => {
-        const payload = await encrypt(key, plaintext)
+        const payload = await encrypt(key, plaintext, frameAad(meta))
         for (const datagram of fragment(meta, payload, maxDatagramSize)) {
           send(datagram)
         }
@@ -125,27 +126,34 @@ function startVideo(
       const { value: frame, done } = await reader.read()
       if (done || !frame) break
 
-      // Round to even dimensions (VP8/H.264) and (re)configure the encoder to
-      // the frame's real size to avoid rescaling/distortion.
-      const width = frame.displayWidth & ~1
-      const height = frame.displayHeight & ~1
-      if (width > 0 && (width !== configuredWidth || height !== configuredHeight)) {
-        encoder.configure(buildEncoderConfig(preset, width, height))
-        configuredWidth = width
-        configuredHeight = height
-        lastKeyframeMs = 0
-      }
+      // Always close the frame, even if configure/encode throws — a leaked
+      // VideoFrame pins a GPU buffer and quickly exhausts the pool.
+      try {
+        // Round to even dimensions (VP8/H.264) and (re)configure the encoder to
+        // the frame's real size to avoid rescaling/distortion.
+        const width = frame.displayWidth & ~1
+        const height = frame.displayHeight & ~1
+        if (width > 0 && (width !== configuredWidth || height !== configuredHeight)) {
+          encoder.configure(buildEncoderConfig(preset, width, height))
+          configuredWidth = width
+          configuredHeight = height
+          lastKeyframeMs = 0
+        }
 
-      if (encoder.state === 'configured') {
-        const nowMs = frame.timestamp / 1000
-        const keyFrame = nowMs - lastKeyframeMs >= KEYFRAME_INTERVAL_MS
-        if (keyFrame) lastKeyframeMs = nowMs
-        encoder.encode(frame, { keyFrame })
+        if (encoder.state === 'configured') {
+          const nowMs = frame.timestamp / 1000
+          const keyFrame = nowMs - lastKeyframeMs >= KEYFRAME_INTERVAL_MS
+          if (keyFrame) lastKeyframeMs = nowMs
+          encoder.encode(frame, { keyFrame })
+        }
+      } finally {
+        frame.close()
       }
-      frame.close()
     }
   }
-  void pump()
+  void pump().catch((error: unknown) =>
+    console.error('video sender stopped', error),
+  )
 }
 
 function startAudio(
@@ -205,20 +213,26 @@ function startAudio(
     while (!isStopped()) {
       const { value: data, done } = await reader.read()
       if (done || !data) break
-      // Configure from the real capture format on the first packet.
-      if (encoder.state === 'unconfigured') {
-        sampleRate = data.sampleRate
-        channels = data.numberOfChannels
-        encoder.configure({
-          codec: AUDIO_CODEC,
-          sampleRate,
-          numberOfChannels: channels,
-          bitrate: AUDIO_BITRATE,
-        })
+      // Always close the AudioData, even if configure/encode throws.
+      try {
+        // Configure from the real capture format on the first packet.
+        if (encoder.state === 'unconfigured') {
+          sampleRate = data.sampleRate
+          channels = data.numberOfChannels
+          encoder.configure({
+            codec: AUDIO_CODEC,
+            sampleRate,
+            numberOfChannels: channels,
+            bitrate: AUDIO_BITRATE,
+          })
+        }
+        if (encoder.state === 'configured') encoder.encode(data)
+      } finally {
+        data.close()
       }
-      if (encoder.state === 'configured') encoder.encode(data)
-      data.close()
     }
   }
-  void pump()
+  void pump().catch((error: unknown) =>
+    console.error('audio sender stopped', error),
+  )
 }

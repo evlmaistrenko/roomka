@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { KeyRound, X } from 'lucide-react'
 
@@ -22,6 +22,7 @@ export function SettingsDialog({
   onClose: () => void
 }) {
   const navigate = useNavigate()
+  const dialogRef = useRef<HTMLDivElement>(null)
   // Preset ids the device can actually encode. Unknown (before the probe
   // resolves) is treated as supported so nothing flickers disabled.
   const [supported, setSupported] = useState<Record<string, boolean>>({})
@@ -50,6 +51,50 @@ export function SettingsDialog({
     return () => document.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
+  // Focus management: move focus into the dialog on open, keep Tab within it,
+  // and restore focus to whatever was focused (the trigger) on close.
+  useEffect(() => {
+    if (!open) return
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const previouslyFocused = document.activeElement as HTMLElement | null
+
+    const focusable = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      )
+
+    dialog.focus()
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (items.length === 0) {
+        event.preventDefault()
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      const inside = active instanceof HTMLElement && items.includes(active)
+      if (event.shiftKey && (!inside || active === first)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (!inside || active === last)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      previouslyFocused?.focus?.()
+    }
+  }, [open])
+
   if (!open) return null
 
   const families = [...new Set(VIDEO_PRESETS.map((preset) => preset.family))]
@@ -60,10 +105,12 @@ export function SettingsDialog({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
-        className="w-full max-w-md rounded-lg border bg-background p-4 shadow-lg"
+        tabIndex={-1}
+        className="w-full max-w-md rounded-lg border bg-background p-4 shadow-lg outline-none"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">

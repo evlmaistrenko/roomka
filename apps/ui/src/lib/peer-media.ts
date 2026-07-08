@@ -21,9 +21,15 @@ export class PeerMedia {
       return
     }
     this.videoBusy = true
-    void this.videoWriter.write(frame).finally(() => {
-      this.videoBusy = false
-    })
+    void this.videoWriter
+      .write(frame)
+      // A successful write hands the frame to the track sink (which owns and
+      // closes it); a rejected write (writer/track closed) does not, so reclaim
+      // it here to avoid leaking the frame and swallow the rejection.
+      .catch(() => frame.close())
+      .finally(() => {
+        this.videoBusy = false
+      })
   }
 
   close() {
