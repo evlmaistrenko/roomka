@@ -141,3 +141,12 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Go build artifacts
+apps/broadcast/broadcast
+apps/broadcast/broadcast.exe
+apps/broadcast/tmp/
+apps/broadcast/build-errors.log
+
+# Imported app settings — contain a live JWT + E2EE key, never commit
+settings.local.json
