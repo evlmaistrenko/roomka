@@ -1,30 +1,35 @@
 {
-  "name": "roomka",
-  "version": "0.1.0",
-  "private": true,
-  "homepage": "https://github.com/evlmaistrenko/roomka#readme",
-  "bugs": {
-    "url": "https://github.com/evlmaistrenko/roomka/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/evlmaistrenko/roomka.git"
-  },
-  "license": "MIT",
-  "type": "module",
-  "scripts": {
-    "dev:broadcast": "dotenv -e .env -- go -C services/broadcast tool air",
-    "dev:graphql": "dotenv -e .env -- npm run dev -w services/graphql",
-    "dev:ui": "dotenv -e .env -- npm run dev -w services/ui",
-    "dev": "concurrently npm:dev:*",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "devDependencies": {
-    "concurrently": "^10.0.3",
-    "dotenv-cli": "^11.0.0"
-  },
-  "workspaces": [
-    "services/graphql",
-    "services/ui"
-  ]
+	"name": "roomka",
+	"version": "0.1.0",
+	"private": true,
+	"homepage": "https://github.com/evlmaistrenko/roomka#readme",
+	"bugs": {
+		"url": "https://github.com/evlmaistrenko/roomka/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/evlmaistrenko/roomka.git"
+	},
+	"license": "MIT",
+	"type": "module",
+	"scripts": {
+		"dev:broadcast": "dotenv -e .env -- go -C services/broadcast tool air",
+		"dev:graphql": "dotenv -e .env -- npm run dev -w services/graphql",
+		"dev:ui": "dotenv -e .env -- npm run dev -w services/ui",
+		"dev": "concurrently npm:dev:*",
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"prepare": "husky"
+	},
+	"devDependencies": {
+		"@commitlint/cli": "^21.2.1",
+		"@commitlint/config-conventional": "^21.2.0",
+		"@trivago/prettier-plugin-sort-imports": "^4.3.0",
+		"concurrently": "^10.0.3",
+		"dotenv-cli": "^11.0.0",
+		"husky": "^9.1.7",
+		"lint-staged": "^17.0.8",
+		"prettier": "3.4.2",
+		"prettier-plugin-jsdoc": "^1.8.1"
+	},
+	"workspaces": ["services/graphql", "services/ui"]
 }
