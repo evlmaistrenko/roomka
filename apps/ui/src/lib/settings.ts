@@ -13,7 +13,9 @@ export type Settings = {
 }
 
 function isJwtShaped(value: unknown): value is string {
-  return typeof value === 'string' && value.split('.').length === 3
+  if (typeof value !== 'string') return false
+  const parts = value.split('.')
+  return parts.length === 3 && parts.every((part) => part.length > 0)
 }
 
 export function loadSettings(): Settings | null {

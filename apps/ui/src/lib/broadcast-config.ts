@@ -108,15 +108,17 @@ const H264_LEVELS: [number, number, number][] = [
   [0x34, 36864, 2073600], // 5.2
 ]
 
-// VP9 levels: [level code (as it appears in the codec string), max luma samples/sec].
-const VP9_LEVELS: [number, number][] = [
-  [30, 20736000], // 3.0
-  [31, 36864000], // 3.1
-  [40, 83558400], // 4.0
-  [41, 160432128], // 4.1
-  [50, 311951360], // 5.0
-  [51, 588251136], // 5.1
-  [52, 1176502272], // 5.2
+// VP9 levels: [level code (as in the codec string), max luma samples/sec, max
+// luma picture size]. The picture-size cap binds before the sample-rate cap at
+// low framerates, so both must be checked to avoid under-declaring the level.
+const VP9_LEVELS: [number, number, number][] = [
+  [30, 20736000, 552960], // 3.0
+  [31, 36864000, 983040], // 3.1
+  [40, 83558400, 2228224], // 4.0
+  [41, 160432128, 4194304], // 4.1
+  [50, 311951360, 8912896], // 5.0
+  [51, 588251136, 8912896], // 5.1
+  [52, 1176502272, 8912896], // 5.2
 ]
 
 export function buildCodecString(
@@ -128,10 +130,12 @@ export function buildCodecString(
   if (codec === 'vp8') return 'vp8'
 
   if (codec === 'vp9') {
-    const luma = width * height * framerate
+    const picture = width * height
+    const luma = picture * framerate
     const level =
-      VP9_LEVELS.find(([, maxLuma]) => luma <= maxLuma)?.[0] ??
-      VP9_LEVELS[VP9_LEVELS.length - 1][0]
+      VP9_LEVELS.find(
+        ([, maxLuma, maxPicture]) => luma <= maxLuma && picture <= maxPicture,
+      )?.[0] ?? VP9_LEVELS[VP9_LEVELS.length - 1][0]
     return `vp09.00.${String(level).padStart(2, '0')}.08`
   }
 
@@ -188,18 +192,49 @@ export async function isConfigSupported(
 
 const STORAGE_KEY = 'roomka:broadcast-config'
 
+function coerce<T>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback
+}
+
 export function loadBroadcastConfig(): BroadcastConfig {
+  let parsed: Partial<BroadcastConfig> = {}
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<BroadcastConfig>
-      // Merge over defaults so a config saved by an older schema still loads.
-      return { ...DEFAULT_BROADCAST_CONFIG, ...parsed }
-    }
+    if (raw) parsed = JSON.parse(raw) as Partial<BroadcastConfig>
   } catch {
-    // corrupt entry — fall back to defaults
+    // corrupt entry — every field falls back to its default below
   }
-  return DEFAULT_BROADCAST_CONFIG
+  // Validate each field against its option list (not just fill missing keys): a
+  // tampered or schema-drifted value (e.g. datagramSize:'xyz' → NaN datagram
+  // size → zero datagrams sent) must never reach the encoder or fragmenter.
+  const d = DEFAULT_BROADCAST_CONFIG
+  return {
+    codec: coerce(
+      parsed.codec,
+      CODEC_OPTIONS.map((option) => option.value),
+      d.codec,
+    ),
+    height: coerce(parsed.height, HEIGHT_OPTIONS, d.height),
+    framerate: coerce(parsed.framerate, FRAMERATE_OPTIONS, d.framerate),
+    bitrate: coerce(parsed.bitrate, BITRATE_OPTIONS, d.bitrate),
+    latencyMode: coerce(parsed.latencyMode, LATENCY_OPTIONS, d.latencyMode),
+    hardwareAcceleration: coerce(
+      parsed.hardwareAcceleration,
+      HARDWARE_OPTIONS,
+      d.hardwareAcceleration,
+    ),
+    keyframeIntervalMs: coerce(
+      parsed.keyframeIntervalMs,
+      KEYFRAME_INTERVAL_OPTIONS,
+      d.keyframeIntervalMs,
+    ),
+    bitrateMode: coerce(parsed.bitrateMode, BITRATE_MODE_OPTIONS, d.bitrateMode),
+    datagramSize: coerce(
+      parsed.datagramSize,
+      DATAGRAM_SIZE_OPTIONS.map((option) => option.value),
+      d.datagramSize,
+    ),
+  }
 }
 
 export function saveBroadcastConfig(config: BroadcastConfig) {

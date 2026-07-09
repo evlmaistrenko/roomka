@@ -34,14 +34,19 @@ export function SettingsDialog({
 }) {
   const navigate = useNavigate()
   const dialogRef = useRef<HTMLDivElement>(null)
-  // Whether the device's encoder supports the chosen config. null = probing.
-  const [supported, setSupported] = useState<boolean | null>(null)
+  // The probed config paired with its result, so the "unsupported" warning only
+  // shows once the *current* config's probe resolves — not the previous
+  // config's verdict while a new probe is still in flight.
+  const [probe, setProbe] = useState<{
+    config: BroadcastConfig
+    ok: boolean
+  } | null>(null)
 
   useEffect(() => {
     if (!open) return
     let cancelled = false
     void isConfigSupported(config).then((ok) => {
-      if (!cancelled) setSupported(ok)
+      if (!cancelled) setProbe({ config, ok })
     })
     return () => {
       cancelled = true
@@ -200,7 +205,7 @@ export function SettingsDialog({
           />
         </div>
 
-        {supported === false && (
+        {probe?.config === config && probe.ok === false && (
           <p className="mt-2 text-xs text-destructive">
             This device’s encoder doesn’t support this combination — adjust
             codec, resolution, or frame rate.

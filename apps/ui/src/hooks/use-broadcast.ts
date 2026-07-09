@@ -99,7 +99,9 @@ export function useBroadcast() {
           onDecryptFailure,
         )
       })
-      .catch((e: unknown) => setError(String(e)))
+      .catch((e: unknown) => {
+        if (!cancelled) setError(String(e))
+      })
 
     const prune = setInterval(() => {
       const now = performance.now()
