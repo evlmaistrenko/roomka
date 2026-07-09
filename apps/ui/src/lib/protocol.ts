@@ -119,7 +119,7 @@ type Pending = {
   meta: FrameMeta
 }
 
-// How many frames behind the newest a partial frame may fall before it's
+// How many frames behind the current frame a partial may fall before it's
 // abandoned (a lost fragment means a dropped frame).
 const STALE_FRAME_WINDOW = 30
 // Hard cap on in-flight partial frames across all streams — a memory backstop
@@ -132,13 +132,12 @@ const MAX_PENDING_FRAMES = 256
 const MAX_CHUNKS = 4096
 
 // Reassembler collects datagram fragments per (senderId, kind, frameId) and
-// emits a complete frame once all its chunks arrive. Partial frames the stream
-// has moved well past are pruned on every datagram — not only on completion —
-// so sustained loss can't grow memory without bound.
+// emits a complete frame once all its chunks arrive. Partial frames older than
+// the current datagram's frame (by more than a window) are pruned on every
+// datagram — not only on completion — so sustained loss can't grow memory
+// without bound.
 export class Reassembler {
   private pending = new Map<string, Pending>()
-  // Highest frameId seen per (senderId, kind), the anchor for staleness pruning.
-  private latest = new Map<string, number>()
 
   push(datagram: Uint8Array): ReassembledFrame | null {
     const view = new DataView(
@@ -168,9 +167,12 @@ export class Reassembler {
     // Audio and video have independent frameId sequences, so the reassembly key
     // must include the kind to avoid collisions.
     const streamKey = `${senderId}:${audio ? 'a' : 'v'}`
-    const newest = Math.max(this.latest.get(streamKey) ?? frameId, frameId)
-    this.latest.set(streamKey, newest)
-    this.dropStale(streamKey, newest)
+    // Prune relative to the *current* datagram's frameId rather than a
+    // persistent high-water mark: a stream that restarts at frameId 0, or a
+    // single forged out-of-range frameId, must not permanently evict every
+    // subsequent legitimate frame. A late-arriving old fragment just prunes
+    // less that tick (its frameId is low); in-order progress prunes stragglers.
+    this.dropStale(streamKey, frameId)
 
     const key = `${streamKey}:${frameId}`
     let entry = this.pending.get(key)
@@ -200,10 +202,10 @@ export class Reassembler {
   }
 
   // Drop partials of a stream that have fallen more than STALE_FRAME_WINDOW
-  // frames behind its newest, anchored on the high-water-mark frameId so a
-  // stream that never completes a frame still gets pruned.
-  private dropStale(streamKey: string, newest: number) {
-    const threshold = newest - STALE_FRAME_WINDOW
+  // frames behind `anchor` (the current datagram's frameId), so a stream that
+  // never completes a frame still gets pruned as it progresses.
+  private dropStale(streamKey: string, anchor: number) {
+    const threshold = anchor - STALE_FRAME_WINDOW
     for (const key of this.pending.keys()) {
       const lastColon = key.lastIndexOf(':')
       if (key.slice(0, lastColon) !== streamKey) continue

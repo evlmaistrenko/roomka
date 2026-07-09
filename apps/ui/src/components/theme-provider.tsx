@@ -5,9 +5,15 @@ import { ThemeProviderContext, type Theme } from '@/components/theme-context'
 const STORAGE_KEY = 'roomka-theme'
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(
-    () => (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? 'system',
-  )
+  const [theme, setThemeState] = useState<Theme>(() => {
+    // Normalize exactly as the pre-paint script in index.html does, so an
+    // unknown/corrupt stored value maps to 'system' in both places and they
+    // can't disagree (which would flash the wrong theme on load).
+    const stored = localStorage.getItem(STORAGE_KEY)
+    return stored === 'light' || stored === 'dark' || stored === 'system'
+      ? stored
+      : 'system'
+  })
 
   useEffect(() => {
     const root = document.documentElement

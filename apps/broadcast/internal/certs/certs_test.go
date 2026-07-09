@@ -14,16 +14,17 @@ import (
 	"time"
 )
 
-// writePair generates a fresh self-signed cert/key pair (identified by serial)
-// and installs it at certPath/keyPath the way a renewal tool would: write a temp
-// file, then rename it over the target. The rename is what would sever a watch
-// registered on the file itself rather than its directory.
-func writePair(t *testing.T, certPath, keyPath string, serial int64) {
+func genKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return key
+}
+
+func certPEMFor(t *testing.T, key *ecdsa.PrivateKey, serial int64) []byte {
+	t.Helper()
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(serial),
 		Subject:      pkix.Name{CommonName: "localhost"},
@@ -34,12 +35,27 @@ func writePair(t *testing.T, certPath, keyPath string, serial int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func keyPEMFor(t *testing.T, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	der, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	atomicWrite(t, certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
-	atomicWrite(t, keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+}
+
+// writePair generates a fresh self-signed cert/key pair (identified by serial)
+// and installs it at certPath/keyPath the way a renewal tool would: write a temp
+// file, then rename it over the target. The rename is what would sever a watch
+// registered on the file itself rather than its directory.
+func writePair(t *testing.T, certPath, keyPath string, serial int64) {
+	t.Helper()
+	key := genKey(t)
+	atomicWrite(t, certPath, certPEMFor(t, key, serial))
+	atomicWrite(t, keyPath, keyPEMFor(t, key))
 }
 
 func atomicWrite(t *testing.T, path string, data []byte) {
@@ -78,6 +94,7 @@ func TestWatcherReloadsOnRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWatcher: %v", err)
 	}
+	t.Cleanup(func() { _ = w.Close() })
 	if got := serialOf(t, w); got != 1 {
 		t.Fatalf("initial serial = %d, want 1", got)
 	}
@@ -93,10 +110,9 @@ func TestWatcherReloadsOnRotation(t *testing.T) {
 	}
 }
 
-// TestWatcherReloadsKeyOnlyChange guards the original bug: a key rotated without
-// the cert's mtime changing must still trigger a reload. Here we rewrite both
-// files but the point is the watcher keys off directory events, not the cert
-// mtime alone.
+// TestWatcherReloadsSeparateDirs verifies both files' directories are watched:
+// with the cert and key in different directories, a rotation is still picked up
+// (the watcher adds each parent dir, not just the cert's).
 func TestWatcherReloadsSeparateDirs(t *testing.T) {
 	certDir := t.TempDir()
 	keyDir := t.TempDir()
@@ -108,6 +124,7 @@ func TestWatcherReloadsSeparateDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWatcher: %v", err)
 	}
+	t.Cleanup(func() { _ = w.Close() })
 	if got := serialOf(t, w); got != 10 {
 		t.Fatalf("initial serial = %d, want 10", got)
 	}
@@ -120,5 +137,41 @@ func TestWatcherReloadsSeparateDirs(t *testing.T) {
 			t.Fatalf("cert in separate dir not reloaded within timeout; serial still %d", serialOf(t, w))
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestWatcherReloadsOnKeyChange guards the original bug directly: a change to
+// the KEY file alone must trigger a reload. The old mtime-poller watched only
+// the cert file and would miss this. We rewrite just the key (same key, so the
+// cert still matches) and assert a reload fired — observable via reloadCount,
+// since a same-key rewrite leaves the served cert's identity unchanged.
+func TestWatcherReloadsOnKeyChange(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+
+	key := genKey(t)
+	atomicWrite(t, certPath, certPEMFor(t, key, 1))
+	atomicWrite(t, keyPath, keyPEMFor(t, key))
+
+	w, err := newWatcher(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("newWatcher: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	before := w.reloadCount()
+
+	// Rewrite ONLY the key file; the cert is left byte-identical.
+	atomicWrite(t, keyPath, keyPEMFor(t, key))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for w.reloadCount() == before {
+		if time.Now().After(deadline) {
+			t.Fatalf("key-file change did not trigger a reload (count still %d)", before)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := serialOf(t, w); got != 1 {
+		t.Fatalf("serial = %d, want 1 (cert identity should be unchanged)", got)
 	}
 }

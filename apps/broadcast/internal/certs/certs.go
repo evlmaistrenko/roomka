@@ -31,9 +31,11 @@ func LoadConfig(certFile, keyFile string) (*tls.Config, error) {
 // on disk change so renewal doesn't require restarting the process.
 type watcher struct {
 	certFile, keyFile string
+	fsw               *fsnotify.Watcher
 
-	mu   sync.RWMutex
-	cert *tls.Certificate
+	mu      sync.RWMutex
+	cert    *tls.Certificate
+	reloads int // successful (re)loads; a test seam, guarded by mu
 }
 
 func newWatcher(certFile, keyFile string) (*watcher, error) {
@@ -46,6 +48,7 @@ func newWatcher(certFile, keyFile string) (*watcher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating cert file watcher: %w", err)
 	}
+	w.fsw = fsw
 	// Watch the parent directories rather than the files themselves: renewal
 	// tools typically install a new cert by writing a temp file and renaming it
 	// over the old one, which moves the inode and would sever a watch registered
@@ -57,8 +60,15 @@ func newWatcher(certFile, keyFile string) (*watcher, error) {
 			return nil, fmt.Errorf("watching %s: %w", dir, err)
 		}
 	}
-	go w.watch(fsw)
+	go w.watch()
 	return w, nil
+}
+
+// Close stops watching and releases the OS handle. Optional in production (the
+// watcher runs for the process lifetime); tests call it to avoid leaking the
+// goroutine and inotify/ReadDirectoryChangesW handle.
+func (w *watcher) Close() error {
+	return w.fsw.Close()
 }
 
 func (w *watcher) reload() error {
@@ -69,8 +79,16 @@ func (w *watcher) reload() error {
 	warnIfInsecureKeyPerm(w.keyFile)
 	w.mu.Lock()
 	w.cert = &cert
+	w.reloads++
 	w.mu.Unlock()
 	return nil
+}
+
+// reloadCount reports how many times the pair has been (re)loaded (test seam).
+func (w *watcher) reloadCount() int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.reloads
 }
 
 func (w *watcher) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -83,9 +101,7 @@ func (w *watcher) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
 // renewal rewrites the cert and key as a burst of events a moment apart, so it
 // debounces: each relevant event (re)arms a short timer and the reload runs
 // only once the burst goes quiet, so we never load a half-written pair.
-func (w *watcher) watch(fsw *fsnotify.Watcher) {
-	defer fsw.Close()
-
+func (w *watcher) watch() {
 	const (
 		debounce   = 500 * time.Millisecond
 		maxRetries = 5
@@ -96,7 +112,7 @@ func (w *watcher) watch(fsw *fsnotify.Watcher) {
 
 	for {
 		select {
-		case event, ok := <-fsw.Events:
+		case event, ok := <-w.fsw.Events:
 			if !ok {
 				return
 			}
@@ -104,7 +120,7 @@ func (w *watcher) watch(fsw *fsnotify.Watcher) {
 				retries = 0
 				timer.Reset(debounce)
 			}
-		case err, ok := <-fsw.Errors:
+		case err, ok := <-w.fsw.Errors:
 			if !ok {
 				return
 			}
