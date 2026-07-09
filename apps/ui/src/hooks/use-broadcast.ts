@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { AudioPlayer } from '@/lib/audio-player'
-import { SAFE_MAX_DATAGRAM_SIZE } from '@/lib/config'
+import {
+  DATAGRAM_SIZE_CAPS,
+  resolveDatagramSize,
+  type BroadcastConfig,
+} from '@/lib/broadcast-config'
 import { PeerMedia } from '@/lib/peer-media'
 import { startReceiving } from '@/lib/receiver'
 import { startShare, type ScreenShare } from '@/lib/sender'
 import { connect } from '@/lib/transport'
-import { type VideoPreset } from '@/lib/video-presets'
 
 const SENDER_TIMEOUT_MS = 3000
 
@@ -134,7 +137,7 @@ export function useBroadcast() {
     }
   }, [onVideoFrame, onAudioData, onDecryptFailure])
 
-  const startSharing = useCallback(async (preset: VideoPreset) => {
+  const startSharing = useCallback(async (config: BroadcastConfig) => {
     const writer = writerRef.current
     const transport = transportRef.current
     if (!writer || !transport || isSharing) return
@@ -149,15 +152,16 @@ export function useBroadcast() {
         // doesn't spray unhandled rejections — real failures surface elsewhere.
         (datagram) => void writer.write(datagram).catch(() => {}),
         senderIdRef.current,
-        // Cap at a size every viewer's path can accept — the relay fans one
-        // datagram out to all viewers and can't re-fragment — clamped to our own
-        // live path MTU, and read fresh each frame so a mid-session drop adapts.
+        // Resolve the chosen datagram-size mode against the live path MTU, read
+        // fresh each frame so a mid-session MTU drop adapts. The relay fans one
+        // datagram out to all viewers and can't re-fragment, so the fixed modes
+        // stay below the size every viewer's path is guaranteed to accept.
         () =>
-          Math.min(
-            SAFE_MAX_DATAGRAM_SIZE,
-            transport.datagrams.maxDatagramSize || SAFE_MAX_DATAGRAM_SIZE,
+          resolveDatagramSize(
+            config.datagramSize,
+            transport.datagrams.maxDatagramSize || DATAGRAM_SIZE_CAPS.safe,
           ),
-        preset,
+        config,
       )
       shareRef.current = share
       setLocalStream(share.stream)

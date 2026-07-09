@@ -4,43 +4,49 @@ import { KeyRound, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { cn } from '@/lib/utils'
-import { isPresetSupported, VIDEO_PRESETS } from '@/lib/video-presets'
+import {
+  BITRATE_MODE_OPTIONS,
+  BITRATE_OPTIONS,
+  CODEC_OPTIONS,
+  DATAGRAM_SIZE_OPTIONS,
+  FRAMERATE_OPTIONS,
+  HARDWARE_OPTIONS,
+  HEIGHT_OPTIONS,
+  isConfigSupported,
+  KEYFRAME_INTERVAL_OPTIONS,
+  LATENCY_OPTIONS,
+  type BroadcastConfig,
+} from '@/lib/broadcast-config'
 
-// A small self-contained modal (no extra dependency) for broadcast settings.
-// For now it only picks the video codec/quality preset; more settings can slot
-// into the same body later.
+// A small self-contained modal (no extra dependency) for broadcast settings:
+// the sharer's video encode parameters plus the datagram-size mode. Each field
+// is exposed individually so behavior can be tuned and tested per network.
 export function SettingsDialog({
   open,
-  presetId,
-  onSelect,
+  config,
+  onChange,
   onClose,
 }: {
   open: boolean
-  presetId: string
-  onSelect: (id: string) => void
+  config: BroadcastConfig
+  onChange: (config: BroadcastConfig) => void
   onClose: () => void
 }) {
   const navigate = useNavigate()
   const dialogRef = useRef<HTMLDivElement>(null)
-  // Preset ids the device can actually encode. Unknown (before the probe
-  // resolves) is treated as supported so nothing flickers disabled.
-  const [supported, setSupported] = useState<Record<string, boolean>>({})
+  // Whether the device's encoder supports the chosen config. null = probing.
+  const [supported, setSupported] = useState<boolean | null>(null)
 
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void Promise.all(
-      VIDEO_PRESETS.map(
-        async (preset) => [preset.id, await isPresetSupported(preset)] as const,
-      ),
-    ).then((entries) => {
-      if (!cancelled) setSupported(Object.fromEntries(entries))
+    void isConfigSupported(config).then((ok) => {
+      if (!cancelled) setSupported(ok)
     })
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, config])
 
   useEffect(() => {
     if (!open) return
@@ -97,8 +103,6 @@ export function SettingsDialog({
 
   if (!open) return null
 
-  const families = [...new Set(VIDEO_PRESETS.map((preset) => preset.family))]
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -126,44 +130,82 @@ export function SettingsDialog({
           </Button>
         </div>
 
-        <p className="mb-2 text-sm font-medium">Broadcast codec</p>
-        <div className="space-y-3">
-          {families.map((family) => (
-            <div key={family}>
-              <p className="mb-1 text-xs text-muted-foreground">{family}</p>
-              <div className="grid grid-cols-3 gap-2">
-                {VIDEO_PRESETS.filter((preset) => preset.family === family).map(
-                  (preset) => {
-                    const available = supported[preset.id] !== false
-                    const selected = preset.id === presetId
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        disabled={!available}
-                        onClick={() => onSelect(preset.id)}
-                        title={
-                          available ? undefined : 'Not supported on this device'
-                        }
-                        className={cn(
-                          'rounded-md border px-2 py-1.5 text-sm transition',
-                          available
-                            ? 'cursor-pointer'
-                            : 'cursor-not-allowed opacity-40',
-                          selected
-                            ? 'border-primary bg-primary/10 font-medium'
-                            : 'hover:border-primary/50',
-                        )}
-                      >
-                        {preset.label}
-                      </button>
-                    )
-                  },
-                )}
-              </div>
-            </div>
-          ))}
+        <div className="space-y-2">
+          <SelectField
+            label="Codec"
+            value={config.codec}
+            options={CODEC_OPTIONS}
+            onChange={(codec) => onChange({ ...config, codec })}
+          />
+          <SelectField
+            label="Resolution"
+            value={config.height}
+            options={HEIGHT_OPTIONS.map((h) => ({ value: h, label: `${h}p` }))}
+            onChange={(height) => onChange({ ...config, height })}
+          />
+          <SelectField
+            label="Frame rate"
+            value={config.framerate}
+            options={FRAMERATE_OPTIONS.map((f) => ({
+              value: f,
+              label: `${f} fps`,
+            }))}
+            onChange={(framerate) => onChange({ ...config, framerate })}
+          />
+          <SelectField
+            label="Bitrate"
+            value={config.bitrate}
+            options={BITRATE_OPTIONS.map((b) => ({
+              value: b,
+              label: `${b / 1_000_000} Mbps`,
+            }))}
+            onChange={(bitrate) => onChange({ ...config, bitrate })}
+          />
+          <SelectField
+            label="Latency mode"
+            value={config.latencyMode}
+            options={LATENCY_OPTIONS.map((l) => ({ value: l, label: l }))}
+            onChange={(latencyMode) => onChange({ ...config, latencyMode })}
+          />
+          <SelectField
+            label="Hardware"
+            value={config.hardwareAcceleration}
+            options={HARDWARE_OPTIONS.map((h) => ({ value: h, label: h }))}
+            onChange={(hardwareAcceleration) =>
+              onChange({ ...config, hardwareAcceleration })
+            }
+          />
+          <SelectField
+            label="Keyframe interval"
+            value={config.keyframeIntervalMs}
+            options={KEYFRAME_INTERVAL_OPTIONS.map((k) => ({
+              value: k,
+              label: `${k} ms`,
+            }))}
+            onChange={(keyframeIntervalMs) =>
+              onChange({ ...config, keyframeIntervalMs })
+            }
+          />
+          <SelectField
+            label="Bitrate mode"
+            value={config.bitrateMode}
+            options={BITRATE_MODE_OPTIONS.map((m) => ({ value: m, label: m }))}
+            onChange={(bitrateMode) => onChange({ ...config, bitrateMode })}
+          />
+          <SelectField
+            label="Max datagram"
+            value={config.datagramSize}
+            options={DATAGRAM_SIZE_OPTIONS}
+            onChange={(datagramSize) => onChange({ ...config, datagramSize })}
+          />
         </div>
+
+        {supported === false && (
+          <p className="mt-2 text-xs text-destructive">
+            This device’s encoder doesn’t support this combination — adjust
+            codec, resolution, or frame rate.
+          </p>
+        )}
 
         <p className="mt-4 text-xs text-muted-foreground">
           Applies to your next screen share. Receivers detect the codec
@@ -189,5 +231,41 @@ export function SettingsDialog({
         </div>
       </div>
     </div>
+  )
+}
+
+// A labeled row with a native <select>. Generic over string/number option
+// values; matches the changed option back by its stringified value.
+function SelectField<T extends string | number>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: { value: T; label: string }[]
+  onChange: (value: T) => void
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <select
+        value={String(value)}
+        onChange={(event) => {
+          const chosen = options.find(
+            (option) => String(option.value) === event.target.value,
+          )
+          if (chosen) onChange(chosen.value)
+        }}
+        className="rounded-md border bg-background px-2 py-1"
+      >
+        {options.map((option) => (
+          <option key={String(option.value)} value={String(option.value)}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }

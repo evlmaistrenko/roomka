@@ -13,10 +13,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { useBroadcast } from '@/hooks/use-broadcast'
+import {
+  loadBroadcastConfig,
+  saveBroadcastConfig,
+  type BroadcastConfig,
+} from '@/lib/broadcast-config'
 import { cn } from '@/lib/utils'
-import { DEFAULT_PRESET_ID, presetById } from '@/lib/video-presets'
-
-const PRESET_STORAGE_KEY = 'roomka:video-preset'
 
 type TileId = number | 'local'
 
@@ -41,14 +43,13 @@ function App() {
     setVolume(value)
     setBroadcastVolume(value)
   }
-  const [presetId, setPresetId] = useState(
-    () => localStorage.getItem(PRESET_STORAGE_KEY) ?? DEFAULT_PRESET_ID,
-  )
+  const [broadcastConfig, setBroadcastConfig] =
+    useState<BroadcastConfig>(loadBroadcastConfig)
 
-  const selectPreset = (id: string) => {
-    setPresetId(id)
-    localStorage.setItem(PRESET_STORAGE_KEY, id)
-  }
+  const updateConfig = useCallback((config: BroadcastConfig) => {
+    setBroadcastConfig(config)
+    saveBroadcastConfig(config)
+  }, [])
 
   // Stable identity so SettingsDialog's Escape/focus-trap effects don't tear
   // down and re-subscribe on every App re-render while the dialog is open.
@@ -120,7 +121,7 @@ function App() {
             <MonitorX /> Stop sharing
           </Button>
         ) : (
-          <Button onClick={() => void startSharing(presetById(presetId))}>
+          <Button onClick={() => void startSharing(broadcastConfig)}>
             <MonitorUp /> Share screen
           </Button>
         )}
@@ -139,8 +140,8 @@ function App() {
 
       <SettingsDialog
         open={settingsOpen}
-        presetId={presetId}
-        onSelect={selectPreset}
+        config={broadcastConfig}
+        onChange={updateConfig}
         onClose={closeSettings}
       />
     </div>

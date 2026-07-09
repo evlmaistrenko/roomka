@@ -1,4 +1,5 @@
-import { AUDIO_BITRATE, AUDIO_CODEC, KEYFRAME_INTERVAL_MS } from './config'
+import { buildEncoderConfig, type BroadcastConfig } from './broadcast-config'
+import { AUDIO_BITRATE, AUDIO_CODEC } from './config'
 import { encrypt, getKey } from './e2ee'
 import {
   AUDIO_CONFIG_PREFIX,
@@ -7,7 +8,6 @@ import {
   withCodec,
   type FrameMeta,
 } from './protocol'
-import { buildEncoderConfig, type VideoPreset } from './video-presets'
 
 export type ScreenShare = {
   stream: MediaStream
@@ -24,12 +24,12 @@ export async function startShare(
   send: (datagram: Uint8Array) => void,
   senderId: number,
   datagramSize: () => number,
-  preset: VideoPreset,
+  config: BroadcastConfig,
 ): Promise<ScreenShare> {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: {
-      height: { ideal: preset.height },
-      frameRate: { ideal: preset.framerate },
+      height: { ideal: config.height },
+      frameRate: { ideal: config.framerate },
     },
     audio: true,
   })
@@ -39,7 +39,7 @@ export async function startShare(
   const cleanups: Array<() => void> = []
   const isStopped = () => stopped
 
-  startVideo(stream, send, senderId, datagramSize, key, preset, cleanups, isStopped)
+  startVideo(stream, send, senderId, datagramSize, key, config, cleanups, isStopped)
   startAudio(stream, send, senderId, datagramSize, key, cleanups, isStopped)
 
   const stop = () => {
@@ -82,7 +82,7 @@ function startVideo(
   senderId: number,
   datagramSize: () => number,
   key: CryptoKey,
-  preset: VideoPreset,
+  config: BroadcastConfig,
   cleanups: Array<() => void>,
   isStopped: () => boolean,
 ) {
@@ -91,6 +91,10 @@ function startVideo(
 
   const emit = makeSender(key, send, datagramSize)
   let frameId = 0
+  // The full codec string the encoder is currently configured with (the level
+  // depends on the frame size, so it's resolved at configure time). Keyframes
+  // are tagged with it so the receiver configures its decoder to match.
+  let currentCodec = ''
   const encoder = new VideoEncoder({
     output: (chunk) => {
       const bytes = new Uint8Array(chunk.byteLength)
@@ -106,7 +110,7 @@ function startVideo(
           keyframe,
           audio: false,
         },
-        keyframe ? withCodec(preset.codec, bytes) : bytes,
+        keyframe ? withCodec(currentCodec, bytes) : bytes,
       )
     },
     error: (error) => console.error('video encoder error', error),
@@ -135,7 +139,9 @@ function startVideo(
         const width = frame.displayWidth & ~1
         const height = frame.displayHeight & ~1
         if (width > 0 && (width !== configuredWidth || height !== configuredHeight)) {
-          encoder.configure(buildEncoderConfig(preset, width, height))
+          const encoderConfig = buildEncoderConfig(config, width, height)
+          encoder.configure(encoderConfig)
+          currentCodec = encoderConfig.codec
           configuredWidth = width
           configuredHeight = height
           lastKeyframeMs = 0
@@ -143,7 +149,7 @@ function startVideo(
 
         if (encoder.state === 'configured') {
           const nowMs = frame.timestamp / 1000
-          const keyFrame = nowMs - lastKeyframeMs >= KEYFRAME_INTERVAL_MS
+          const keyFrame = nowMs - lastKeyframeMs >= config.keyframeIntervalMs
           if (keyFrame) lastKeyframeMs = nowMs
           encoder.encode(frame, { keyFrame })
         }
