@@ -1,7 +1,15 @@
-// Hardcoded for now (no runtime config injection yet). These match apps/broadcast's
-// dev defaults: PORT=4433, ROUTE=/, DEV_CERT_HASH_PORT=8080.
-export const WEBTRANSPORT_URL = "https://localhost:4433/"
-export const CERT_HASH_URL = "http://localhost:8080/cert-hash"
+// Broadcast connection parameters come from the shared ROOMKA_PUBLIC_BROADCAST_*
+// env vars (Vite exposes them via envPrefix), so host/port/route are defined
+// once in the monorepo .env and read by both the relay and this client. Falls
+// back to the dev defaults so the app still runs without a configured .env.
+const host = import.meta.env.ROOMKA_PUBLIC_BROADCAST_HOST ?? "localhost"
+const port = import.meta.env.ROOMKA_PUBLIC_BROADCAST_PORT ?? "4433"
+const route = import.meta.env.ROOMKA_PUBLIC_BROADCAST_ROUTE ?? "/"
+const certHashPort =
+	import.meta.env.ROOMKA_PUBLIC_BROADCAST_CERT_HASH_PORT ?? "8080"
+
+export const WEBTRANSPORT_URL = `https://${host}:${port}${route}`
+export const CERT_HASH_URL = `http://${host}:${certHashPort}/cert-hash`
 
 // Video codec, resolution, framerate, and bitrate are per-share choices now —
 // see lib/video-presets.ts (the sharer picks a preset in Settings; the receiver

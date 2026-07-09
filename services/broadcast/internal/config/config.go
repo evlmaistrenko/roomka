@@ -1,8 +1,10 @@
 // Package config reads the broadcast server's settings from the environment.
-// Every value comes from a ROOMKA_BROADCAST_* variable (with a sensible
-// default). How those variables get set is not this program's concern: in
-// production the container runtime injects them; in development the dev script
-// loads them from the monorepo's root .env.
+// Non-secret connection values shared with the UI come from ROOMKA_PUBLIC_*
+// variables (the UI reads the same ones — see services/ui), while server-only
+// secrets and file paths come from ROOMKA_BROADCAST_* (never exposed to the
+// client). Each has a sensible default. How those variables get set is not this
+// program's concern: in production the container runtime injects them; in
+// development the dev script loads them from the monorepo's root .env.
 package config
 
 import "os"
@@ -26,11 +28,11 @@ type Config struct {
 // Load reads the configuration from the environment.
 func Load() Config {
 	return Config{
-		Port:            env("ROOMKA_BROADCAST_PORT", "4433"),
-		Route:           env("ROOMKA_BROADCAST_ROUTE", "/"),
+		Port:            env("ROOMKA_PUBLIC_BROADCAST_PORT", "4433"),
+		Route:           env("ROOMKA_PUBLIC_BROADCAST_ROUTE", "/"),
 		CertPath:        env("ROOMKA_BROADCAST_CERT_PATH", ""),
 		CertKeyPath:     env("ROOMKA_BROADCAST_CERT_KEY_PATH", ""),
-		DevCertHashPort: env("ROOMKA_BROADCAST_DEV_CERT_HASH_PORT", "8080"),
+		DevCertHashPort: env("ROOMKA_PUBLIC_BROADCAST_CERT_HASH_PORT", "8080"),
 		// No default: production must set a strong secret, and dev falls back to
 		// DevJWTSecret explicitly (see main). An empty value here is the signal
 		// that nothing was configured.
