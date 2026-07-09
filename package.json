@@ -17,7 +17,8 @@
 		"dev:graphql": "dotenv -e .env -- npm run dev -w services/graphql",
 		"dev:ui": "dotenv -e .env -- npm run dev -w services/ui",
 		"dev": "concurrently npm:dev:*",
-		"test": "echo \"Error: no test specified\" && exit 1",
+		"test:broadcast": "dotenv -e .env -- go -C services/broadcast test ./...",
+		"test": "concurrently npm:test:*",
 		"prepare": "husky"
 	},
 	"devDependencies": {
