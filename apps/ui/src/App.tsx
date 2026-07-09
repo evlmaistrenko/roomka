@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
+  Activity,
   Maximize,
   Minimize,
   MonitorUp,
@@ -12,6 +13,7 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { SettingsDialog } from '@/components/settings-dialog'
+import { StatsOverlay } from '@/components/stats-overlay'
 import { useBroadcast } from '@/hooks/use-broadcast'
 import {
   loadBroadcastConfig,
@@ -33,10 +35,12 @@ function App() {
     setPeerPlaying,
     setVolume: setBroadcastVolume,
     getStream,
+    getStats,
   } = useBroadcast()
 
   const [active, setActive] = useState<TileId | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [statsOpen, setStatsOpen] = useState(false)
   const [volume, setVolume] = useState(1)
 
   const changeVolume = (value: number) => {
@@ -92,6 +96,15 @@ function App() {
           hasAudio={typeof resolvedActive === 'number'}
           volume={volume}
           onVolumeChange={changeVolume}
+          overlay={
+            statsOpen && resolvedActive !== null ? (
+              <StatsOverlay
+                active={resolvedActive}
+                getStats={getStats}
+                config={broadcastConfig}
+              />
+            ) : undefined
+          }
           empty={
             tiles.length > 0
               ? 'Select a stream on the right to watch it here.'
@@ -127,6 +140,16 @@ function App() {
         )}
         <div className="flex flex-1 items-center justify-end gap-2">
           <Button
+            variant={statsOpen ? 'secondary' : 'ghost'}
+            size="icon"
+            onClick={() => setStatsOpen((open) => !open)}
+            aria-label="Stats"
+            aria-pressed={statsOpen}
+            title="Stats for nerds"
+          >
+            <Activity />
+          </Button>
+          <Button
             variant="ghost"
             size="icon"
             onClick={() => setSettingsOpen(true)}
@@ -155,12 +178,14 @@ function MainStage({
   hasAudio,
   volume,
   onVolumeChange,
+  overlay,
   empty,
 }: {
   stream: MediaStream | null
   hasAudio: boolean
   volume: number
   onVolumeChange: (value: number) => void
+  overlay?: ReactNode
   empty: ReactNode
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -200,6 +225,7 @@ function MainStage({
             playsInline
             className="h-full w-full object-contain"
           />
+          {overlay}
           <div className="absolute right-3 top-3 flex items-center gap-2 opacity-0 transition group-hover:opacity-100">
             {hasAudio && (
               <VolumeControl volume={volume} onChange={onVolumeChange} />

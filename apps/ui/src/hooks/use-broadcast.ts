@@ -7,7 +7,7 @@ import {
   type BroadcastConfig,
 } from '@/lib/broadcast-config'
 import { PeerMedia } from '@/lib/peer-media'
-import { startReceiving } from '@/lib/receiver'
+import { startReceiving, type ReceiverStats } from '@/lib/receiver'
 import { startShare, type ScreenShare } from '@/lib/sender'
 import { connect } from '@/lib/transport'
 
@@ -32,6 +32,7 @@ export function useBroadcast() {
   const playingPeers = useRef(new Set<number>())
   const lastSeen = useRef(new Map<number, number>())
   const volumeRef = useRef(1)
+  const getStatsRef = useRef<(() => ReceiverStats[]) | null>(null)
 
   // Ensure a PeerMedia (and thus its MediaStream) exists as soon as a sender is
   // seen — from audio OR video — so the tile can bind srcObject even when the
@@ -92,12 +93,14 @@ export function useBroadcast() {
         }
         transportRef.current = transport
         writerRef.current = transport.datagrams.writable.getWriter()
-        stopReceiving = startReceiving(
+        const receiver = startReceiving(
           transport,
           onVideoFrame,
           onAudioData,
           onDecryptFailure,
         )
+        stopReceiving = receiver.stop
+        getStatsRef.current = receiver.getStats
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(String(e))
@@ -125,6 +128,7 @@ export function useBroadcast() {
       cancelled = true
       clearInterval(prune)
       stopReceiving?.()
+      getStatsRef.current = null
       shareRef.current?.stop()
       shareRef.current = null
       writerRef.current?.releaseLock()
@@ -198,6 +202,13 @@ export function useBroadcast() {
     [],
   )
 
+  // Snapshot of per-sender receive stats for the debug overlay (empty until
+  // connected). Stable identity — the overlay polls it on its own interval.
+  const getStats = useCallback(
+    (): ReceiverStats[] => getStatsRef.current?.() ?? [],
+    [],
+  )
+
   // Master playback volume (0..1) applied to every peer's audio. Only the active
   // peer is unmuted at a time, so one control governs what the viewer hears.
   const setVolume = useCallback((volume: number) => {
@@ -215,5 +226,6 @@ export function useBroadcast() {
     setPeerPlaying,
     setVolume,
     getStream,
+    getStats,
   }
 }

@@ -5,6 +5,34 @@ import { AUDIO_CONFIG_PREFIX, frameAad, readCodec, Reassembler } from './protoco
 export type VideoFrameHandler = (senderId: number, frame: VideoFrame) => void
 export type AudioDataHandler = (senderId: number, data: AudioData) => void
 
+// Per-sender receive stats for the debug overlay. All counters are cumulative
+// except decodeQueueSize (instantaneous); the consumer derives bitrate/fps from
+// deltas of `bytes`/`framesDecoded`.
+export type ReceiverStats = {
+  senderId: number
+  codec: string
+  width: number
+  height: number
+  bytes: number
+  datagrams: number
+  framesDecoded: number
+  framesDropped: number
+  decryptFailures: number
+  decoderErrors: number
+  decodeQueueSize: number
+  audioSampleRate: number
+  audioChannels: number
+}
+
+type Counters = Omit<ReceiverStats, 'senderId' | 'decodeQueueSize'> & {
+  lastFrameId: number // highest video frameId seen, for gap-based drop counting
+}
+
+export type Receiver = {
+  stop: () => void
+  getStats: () => ReceiverStats[]
+}
+
 // Consecutive fully-reassembled frames that fail AES-GCM auth before we conclude
 // the E2EE key is wrong. Lost fragments are dropped earlier (at reassembly), so
 // auth failures on *complete* frames almost always mean a key mismatch, not loss.
@@ -19,11 +47,34 @@ export function startReceiving(
   onVideoFrame: VideoFrameHandler,
   onAudioData: AudioDataHandler,
   onDecryptFailure: () => void,
-): () => void {
+): Receiver {
   const reader = transport.datagrams.readable.getReader()
   const reassembler = new Reassembler()
   const videoDecoders = new Map<number, VideoDecoder>()
   const audioDecoders = new Map<number, AudioDecoder>()
+
+  const stats = new Map<number, Counters>()
+  const statsFor = (senderId: number): Counters => {
+    let s = stats.get(senderId)
+    if (!s) {
+      s = {
+        codec: '',
+        width: 0,
+        height: 0,
+        bytes: 0,
+        datagrams: 0,
+        framesDecoded: 0,
+        framesDropped: 0,
+        decryptFailures: 0,
+        decoderErrors: 0,
+        audioSampleRate: 0,
+        audioChannels: 0,
+        lastFrameId: -1,
+      }
+      stats.set(senderId, s)
+    }
+    return s
+  }
   // Codec each sender's video decoder is currently configured for (from the
   // codec tag on that sender's keyframes). Absent = not yet configured.
   const videoCodecs = new Map<number, string>()
@@ -36,13 +87,20 @@ export function startReceiving(
     let decoder = videoDecoders.get(senderId)
     if (!decoder) {
       decoder = new VideoDecoder({
-        output: (frame) => onVideoFrame(senderId, frame),
+        output: (frame) => {
+          const s = statsFor(senderId)
+          s.framesDecoded++
+          s.width = frame.displayWidth
+          s.height = frame.displayHeight
+          onVideoFrame(senderId, frame)
+        },
         // A fatal decoder error (corrupt bitstream, unsupported frame) leaves
         // the decoder closed. Drop it so this sender gets a fresh decoder on its
         // next keyframe, instead of wedging playback for everyone. Clearing the
         // codec entry forces reconfiguration and makes deltas wait for a key.
         error: (error) => {
           console.error('video decoder error', error)
+          statsFor(senderId).decoderErrors++
           videoDecoders.delete(senderId)
           videoCodecs.delete(senderId)
         },
@@ -69,6 +127,7 @@ export function startReceiving(
         // receive loop.
         error: (error) => {
           console.error('audio decoder error', error)
+          statsFor(senderId).decoderErrors++
           audioDecoders.delete(senderId)
           audioConfigs.delete(senderId)
         },
@@ -101,6 +160,19 @@ export function startReceiving(
       // format) must drop only that frame, never tear down reception from every
       // sender. The read() itself stays outside — its rejection ends the loop.
       try {
+        // Count bytes/datagrams per sender for the debug overlay (senderId is
+        // the first header field). Guarded so a runt datagram just isn't counted.
+        if (value.byteLength >= 4) {
+          const senderId = new DataView(
+            value.buffer,
+            value.byteOffset,
+            value.byteLength,
+          ).getUint32(0, true)
+          const s = statsFor(senderId)
+          s.datagrams++
+          s.bytes += value.byteLength
+        }
+
         const frame = reassembler.push(value)
         if (!frame) continue
 
@@ -110,6 +182,7 @@ export function startReceiving(
         // wrong key — report it once.
         const data = await decrypt(key, frame.data, frameAad(frame))
         if (!data) {
+          statsFor(frame.senderId).decryptFailures++
           if (++decryptFailures === DECRYPT_FAILURE_LIMIT) onDecryptFailure()
           continue
         }
@@ -123,6 +196,9 @@ export function startReceiving(
           )
           const sampleRate = view.getUint32(0, true)
           const channels = view.getUint8(4)
+          const s = statsFor(frame.senderId)
+          s.audioSampleRate = sampleRate
+          s.audioChannels = channels
           audioDecoderFor(frame.senderId, sampleRate, channels).decode(
             new EncodedAudioChunk({
               type: 'key',
@@ -131,6 +207,20 @@ export function startReceiving(
             }),
           )
           continue
+        }
+
+        // Count dropped video frames from gaps in the frameId sequence (a
+        // never-reassembled frame leaves a hole). Only on forward progress;
+        // reordering is ignored and a big backward jump is treated as a restart.
+        const s = statsFor(frame.senderId)
+        if (s.lastFrameId < 0) {
+          s.lastFrameId = frame.frameId
+        } else if (frame.frameId > s.lastFrameId) {
+          const gap = frame.frameId - s.lastFrameId
+          if (gap > 1 && gap < 300) s.framesDropped += gap - 1
+          s.lastFrameId = frame.frameId
+        } else if (frame.frameId < s.lastFrameId - 100) {
+          s.lastFrameId = frame.frameId
         }
 
         // Keyframes carry a codec tag; configure (or reconfigure, if the sender
@@ -143,6 +233,7 @@ export function startReceiving(
           if (videoCodecs.get(frame.senderId) !== tagged.codec) {
             videoDecoderFor(frame.senderId).configure({ codec: tagged.codec })
             videoCodecs.set(frame.senderId, tagged.codec)
+            s.codec = tagged.codec
           }
         } else if (!videoCodecs.has(frame.senderId)) {
           continue // no keyframe seen yet — can't decode deltas
@@ -161,7 +252,24 @@ export function startReceiving(
   }
   void pump().catch((error: unknown) => console.error('receiver stopped', error))
 
-  return () => {
+  const getStats = (): ReceiverStats[] =>
+    Array.from(stats.entries()).map(([senderId, s]) => ({
+      senderId,
+      codec: s.codec,
+      width: s.width,
+      height: s.height,
+      bytes: s.bytes,
+      datagrams: s.datagrams,
+      framesDecoded: s.framesDecoded,
+      framesDropped: s.framesDropped,
+      decryptFailures: s.decryptFailures,
+      decoderErrors: s.decoderErrors,
+      decodeQueueSize: videoDecoders.get(senderId)?.decodeQueueSize ?? 0,
+      audioSampleRate: s.audioSampleRate,
+      audioChannels: s.audioChannels,
+    }))
+
+  const stop = () => {
     stopped = true
     void reader.cancel().catch(() => {})
     for (const decoder of videoDecoders.values()) {
@@ -171,4 +279,6 @@ export function startReceiving(
       if (decoder.state !== 'closed') decoder.close()
     }
   }
+
+  return { stop, getStats }
 }
