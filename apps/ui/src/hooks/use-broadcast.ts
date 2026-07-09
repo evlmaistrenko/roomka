@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { AudioPlayer } from '@/lib/audio-player'
+import { SAFE_MAX_DATAGRAM_SIZE } from '@/lib/config'
 import { PeerMedia } from '@/lib/peer-media'
 import { startReceiving } from '@/lib/receiver'
 import { startShare, type ScreenShare } from '@/lib/sender'
@@ -138,14 +139,24 @@ export function useBroadcast() {
     const transport = transportRef.current
     if (!writer || !transport || isSharing) return
     try {
-      const maxDatagramSize = transport.datagrams.maxDatagramSize || 1200
+      if (!transport.datagrams.maxDatagramSize) {
+        setError('This connection does not support datagrams.')
+        return
+      }
       const share = await startShare(
         // Datagram delivery is best-effort; a write rejects when the transport
         // closes (e.g. on stop/unmount). Swallow it so a closing transport
         // doesn't spray unhandled rejections — real failures surface elsewhere.
         (datagram) => void writer.write(datagram).catch(() => {}),
         senderIdRef.current,
-        maxDatagramSize,
+        // Cap at a size every viewer's path can accept — the relay fans one
+        // datagram out to all viewers and can't re-fragment — clamped to our own
+        // live path MTU, and read fresh each frame so a mid-session drop adapts.
+        () =>
+          Math.min(
+            SAFE_MAX_DATAGRAM_SIZE,
+            transport.datagrams.maxDatagramSize || SAFE_MAX_DATAGRAM_SIZE,
+          ),
         preset,
       )
       shareRef.current = share

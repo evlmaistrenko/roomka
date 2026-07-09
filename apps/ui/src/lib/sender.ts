@@ -23,7 +23,7 @@ export type ScreenShare = {
 export async function startShare(
   send: (datagram: Uint8Array) => void,
   senderId: number,
-  maxDatagramSize: number,
+  datagramSize: () => number,
   preset: VideoPreset,
 ): Promise<ScreenShare> {
   const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -39,8 +39,8 @@ export async function startShare(
   const cleanups: Array<() => void> = []
   const isStopped = () => stopped
 
-  startVideo(stream, send, senderId, maxDatagramSize, key, preset, cleanups, isStopped)
-  startAudio(stream, send, senderId, maxDatagramSize, key, cleanups, isStopped)
+  startVideo(stream, send, senderId, datagramSize, key, preset, cleanups, isStopped)
+  startAudio(stream, send, senderId, datagramSize, key, cleanups, isStopped)
 
   const stop = () => {
     if (stopped) return
@@ -56,18 +56,19 @@ export async function startShare(
 }
 
 // encryptAndSend serializes encryption per track (a promise chain) so chunks are
-// sent in encode order despite crypto being async.
+// sent in encode order despite crypto being async. datagramSize is read fresh
+// per frame so a mid-session path-MTU change is picked up.
 function makeSender(
   key: CryptoKey,
   send: (datagram: Uint8Array) => void,
-  maxDatagramSize: number,
+  datagramSize: () => number,
 ) {
   let chain: Promise<void> = Promise.resolve()
   return (meta: FrameMeta, plaintext: Uint8Array) => {
     chain = chain
       .then(async () => {
         const payload = await encrypt(key, plaintext, frameAad(meta))
-        for (const datagram of fragment(meta, payload, maxDatagramSize)) {
+        for (const datagram of fragment(meta, payload, datagramSize())) {
           send(datagram)
         }
       })
@@ -79,7 +80,7 @@ function startVideo(
   stream: MediaStream,
   send: (datagram: Uint8Array) => void,
   senderId: number,
-  maxDatagramSize: number,
+  datagramSize: () => number,
   key: CryptoKey,
   preset: VideoPreset,
   cleanups: Array<() => void>,
@@ -88,7 +89,7 @@ function startVideo(
   const track = stream.getVideoTracks()[0]
   if (!track) return
 
-  const emit = makeSender(key, send, maxDatagramSize)
+  const emit = makeSender(key, send, datagramSize)
   let frameId = 0
   const encoder = new VideoEncoder({
     output: (chunk) => {
@@ -160,7 +161,7 @@ function startAudio(
   stream: MediaStream,
   send: (datagram: Uint8Array) => void,
   senderId: number,
-  maxDatagramSize: number,
+  datagramSize: () => number,
   key: CryptoKey,
   cleanups: Array<() => void>,
   isStopped: () => boolean,
@@ -171,7 +172,7 @@ function startAudio(
     return
   }
 
-  const emit = makeSender(key, send, maxDatagramSize)
+  const emit = makeSender(key, send, datagramSize)
   let frameId = 0
   let sampleRate = 0
   let channels = 0
