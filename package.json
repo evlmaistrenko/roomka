@@ -13,9 +13,9 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev:broadcast": "dotenv -e .env -- go -C apps/broadcast tool air",
-    "dev:graphql": "dotenv -e .env -- npm run dev -w apps/graphql",
-    "dev:ui": "dotenv -e .env -- npm run dev -w apps/ui",
+    "dev:broadcast": "dotenv -e .env -- go -C services/broadcast tool air",
+    "dev:graphql": "dotenv -e .env -- npm run dev -w services/graphql",
+    "dev:ui": "dotenv -e .env -- npm run dev -w services/ui",
     "dev": "concurrently npm:dev:*",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -24,7 +24,7 @@
     "dotenv-cli": "^11.0.0"
   },
   "workspaces": [
-    "apps/graphql",
-    "apps/ui"
+    "services/graphql",
+    "services/ui"
   ]
 }
