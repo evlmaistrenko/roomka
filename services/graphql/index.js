@@ -1,1 +1,1 @@
-console.info("Running graphql...");
+console.info("Running graphql...")

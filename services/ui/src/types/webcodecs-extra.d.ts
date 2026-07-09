@@ -6,24 +6,24 @@
 export {}
 
 declare global {
-  interface MediaStreamTrackProcessorInit {
-    track: MediaStreamTrack
-    maxBufferSize?: number
-  }
+	interface MediaStreamTrackProcessorInit {
+		track: MediaStreamTrack
+		maxBufferSize?: number
+	}
 
-  class MediaStreamTrackProcessor<T = VideoFrame> {
-    constructor(init: MediaStreamTrackProcessorInit)
-    readonly readable: ReadableStream<T>
-  }
+	class MediaStreamTrackProcessor<T = VideoFrame> {
+		constructor(init: MediaStreamTrackProcessorInit)
+		readonly readable: ReadableStream<T>
+	}
 
-  interface MediaStreamTrackGeneratorInit {
-    kind: 'audio' | 'video'
-  }
+	interface MediaStreamTrackGeneratorInit {
+		kind: "audio" | "video"
+	}
 
-  class MediaStreamTrackGenerator<
-    T extends VideoFrame | AudioData = VideoFrame,
-  > extends MediaStreamTrack {
-    constructor(init: MediaStreamTrackGeneratorInit)
-    readonly writable: WritableStream<T>
-  }
+	class MediaStreamTrackGenerator<
+		T extends VideoFrame | AudioData = VideoFrame,
+	> extends MediaStreamTrack {
+		constructor(init: MediaStreamTrackGeneratorInit)
+		readonly writable: WritableStream<T>
+	}
 }
