@@ -160,9 +160,9 @@ export function useBroadcast() {
 					(datagram) => void writer.write(datagram).catch(() => {}),
 					senderIdRef.current,
 					// Resolve the chosen datagram-size mode against the live path MTU, read
-					// fresh each frame so a mid-session MTU drop adapts. The relay fans one
-					// datagram out to all viewers and can't re-fragment, so the fixed modes
-					// stay below the size every viewer's path is guaranteed to accept.
+					// fresh each frame so a mid-session MTU drop adapts. The broadcast server
+					// fans one datagram out to all viewers and can't re-fragment, so the fixed
+					// modes stay below the size every viewer's path is guaranteed to accept.
 					() =>
 						resolveDatagramSize(
 							config.datagramSize,

@@ -23,6 +23,10 @@
         }
       })();
     </script>
+    <!-- Runtime connection config. Static/empty in dev (falls back to build-time
+         env); the container overwrites it from env at startup. Must load before
+         the app module below. -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="root"></div>

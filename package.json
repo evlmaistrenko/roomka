@@ -14,7 +14,6 @@
 	"type": "module",
 	"scripts": {
 		"dev:broadcast": "dotenv -e .env -- go -C services/broadcast tool air",
-		"dev:graphql": "dotenv -e .env -- npm run dev -w services/graphql",
 		"dev:ui": "dotenv -e .env -- npm run dev -w services/ui",
 		"dev": "concurrently npm:dev:*",
 		"test:broadcast": "dotenv -e .env -- go -C services/broadcast test ./...",
@@ -32,5 +31,5 @@
 		"prettier": "3.4.2",
 		"prettier-plugin-jsdoc": "^1.8.1"
 	},
-	"workspaces": ["services/graphql", "services/ui"]
+	"workspaces": ["services/ui"]
 }

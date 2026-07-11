@@ -1,9 +1,9 @@
 // End-to-end encryption of the media payload (the encoded video/audio bytes)
-// with AES-GCM. The relay only ever sees ciphertext. The datagram header
-// (senderId/frameId/timestamp/flags) stays in the clear — it's routing
+// with AES-GCM. The broadcast server only ever sees ciphertext. The datagram
+// header (senderId/frameId/timestamp/flags) stays in the clear — it's routing
 // metadata, not content — but the caller binds it as additional authenticated
-// data (see protocol.frameAad) so the untrusted relay can't tamper with it
-// without failing decryption.
+// data (see protocol.frameAad) so the untrusted broadcast server can't tamper
+// with it without failing decryption.
 //
 // The key comes from the imported settings file (see settings.ts), not a
 // hardcoded constant. Every peer in a room must import the same key to interop.

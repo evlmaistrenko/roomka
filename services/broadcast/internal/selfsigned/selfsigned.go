@@ -1,7 +1,9 @@
-// Package dev provides the development-mode TLS setup: an ephemeral,
-// self-signed cert regenerated on each start, plus a small HTTP endpoint that
-// serves its hash for browser serverCertificateHashes pinning.
-package dev
+// Package selfsigned generates an ephemeral, self-signed TLS certificate for the
+// WebTransport server, returned with the SHA-256 hash the browser pins via the
+// serverCertificateHashes API (which requires the cert to be valid for at most
+// two weeks). It replaces a real CA cert when ROOMKA_WEB_TRANSPORT_CERT is
+// "ephemeral".
+package selfsigned
 
 import (
 	"crypto/ecdsa"
@@ -12,19 +14,15 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
-	"encoding/json"
 	"log"
 	"math/big"
 	"net"
-	"net/http"
 	"time"
 )
 
-// GenerateConfig creates an ephemeral, self-signed cert for local development
+// GenerateConfig creates an ephemeral, self-signed cert (valid for localhost)
 // and returns it together with its SHA-256 hash (base64). Clients that can't
-// rely on a trusted CA (e.g. browsers talking to localhost) pin it via the
-// serverCertificateHashes API, which requires the cert to be valid for no more
-// than two weeks.
+// rely on a trusted CA pin it via serverCertificateHashes.
 func GenerateConfig() (*tls.Config, string) {
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -58,24 +56,4 @@ func GenerateConfig() (*tls.Config, string) {
 			PrivateKey:  privateKey,
 		}},
 	}, certHash
-}
-
-// ServeHash exposes the dev cert's hash over plain HTTP so a browser can fetch
-// it out of band (before the WebTransport handshake, since the self-signed
-// cert isn't otherwise trusted) and pass it to serverCertificateHashes. Only
-// used in dev; production certs are CA-trusted and need no pinning.
-func ServeHash(address, certHash string) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/cert-hash", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"algorithm": "sha-256",
-			"hash":      certHash,
-		})
-	})
-	log.Printf("dev cert-hash endpoint listening on http://localhost%s/cert-hash", address)
-	if err := http.ListenAndServe(address, mux); err != nil {
-		log.Printf("dev cert-hash endpoint failed: %v", err)
-	}
 }

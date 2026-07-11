@@ -1,0 +1,30 @@
+{
+	email {$ROOMKA_ACME_EMAIL}
+	# Pin the ACME CA to Let's Encrypt so the issued cert lands at a predictable
+	# storage path — the entrypoint points the broadcast server's cert there.
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+	# Disable HTTP/3 so Caddy doesn't bind 443/udp — the broadcast server owns that
+	# port for WebTransport. The UI is still served over HTTP/1.1 + HTTP/2 on
+	# 443/tcp, which doesn't collide since TCP and UDP ports are independent. This
+	# keeps the image down to just 80, 443, and 443/udp.
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$ROOMKA_HOSTNAME} {
+	# broadcast's HTTP API (cert-hash now, more later) — reverse-proxied so the UI
+	# reaches it same-origin over https.
+	handle /api/* {
+		reverse_proxy localhost:{$ROOMKA_API_PORT}
+	}
+	# Everything else: the UI.
+	handle {
+		root * /srv
+		encode gzip
+		# SPA: serve real files (assets, /config.js), fall back to index.html so
+		# client-side routes (e.g. /import) resolve.
+		try_files {path} /index.html
+		file_server
+	}
+}

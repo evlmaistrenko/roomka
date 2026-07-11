@@ -58,13 +58,6 @@ export default {
 			},
 		},
 		{
-			files: ["*.graphql", "*.gql"],
-			options: {
-				parser: "graphql",
-				useTabs: true,
-			},
-		},
-		{
 			files: ["README.hbs", "*.md"],
 			options: {
 				parser: "markdown",

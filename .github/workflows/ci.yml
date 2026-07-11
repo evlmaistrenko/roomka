@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# Cancel superseded runs when a PR gets new commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: ESLint (ui)
+        run: npm run lint --workspace services/ui
+      - name: Typecheck (ui)
+        run: npx tsc -b
+        working-directory: services/ui
+      - name: Prettier
+        run: npx prettier --check .
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/broadcast/go.mod
+          cache-dependency-path: services/broadcast/go.sum
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l services/broadcast)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-ed:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go -C services/broadcast vet ./...
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/broadcast/go.mod
+          cache-dependency-path: services/broadcast/go.sum
+      - name: go test
+        run: go -C services/broadcast test ./...

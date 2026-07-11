@@ -1,48 +1,43 @@
 // Package config reads the broadcast server's settings from the environment.
-// Non-secret connection values shared with the UI come from ROOMKA_PUBLIC_*
-// variables (the UI reads the same ones — see services/ui), while server-only
-// secrets and file paths come from ROOMKA_BROADCAST_* (never exposed to the
-// client). Each has a sensible default. How those variables get set is not this
-// program's concern: in production the container runtime injects them; in
-// development the dev script loads them from the monorepo's root .env.
+// Every value is a required ROOMKA_* variable with no default — a missing one is
+// a hard startup error, so the running configuration is always explicit.
 package config
 
-import "os"
+import (
+	"log"
+	"os"
+	"strings"
+)
 
-// DevJWTSecret is the well-known placeholder secret used only in development
-// (when ROOMKA_BROADCAST_JWT_SECRET is unset and no production certs are
-// configured). It is intentionally public — production must never use it, and
-// main refuses to start if it is in effect while serving real certificates.
-const DevJWTSecret = "roomka-dev-jwt-secret-change-in-production"
-
-// Config holds every runtime parameter of the broadcast server.
+// Config holds every runtime parameter of the broadcast server. HOSTNAME is not
+// here: the server binds all interfaces and its ephemeral cert is pinned by
+// hash, so the hostname has no server-side effect (it's a UI/Caddy concern).
 type Config struct {
-	Port            string // UDP/QUIC port for WebTransport; bound on all interfaces
-	Route           string // HTTP route the WebTransport CONNECT upgrade is mounted on
-	CertPath        string // production PEM certificate file; empty enables dev mode
-	CertKeyPath     string // production PEM private key file, paired with CertPath
-	DevCertHashPort string // dev mode: plain-HTTP port serving the cert hash
-	JWTSecret       string // HMAC secret verifying the JWT that gates connections
+	WebTransportCert string // ROOMKA_WEB_TRANSPORT_CERT: "ephemeral" or "static:<cert>;<key>"
+	WebTransportPort string // ROOMKA_WEB_TRANSPORT_PORT: UDP/QUIC bind port
+	APIPort          string // ROOMKA_API_PORT: HTTP API bind port
+	AccessSecret     string // ROOMKA_ACCESS_SECRET: HMAC secret for access tokens
 }
 
-// Load reads the configuration from the environment.
+// Load reads the configuration from the environment, exiting if any required
+// variable is unset or empty. All missing names are reported at once.
 func Load() Config {
-	return Config{
-		Port:            env("ROOMKA_PUBLIC_BROADCAST_PORT", "4433"),
-		Route:           env("ROOMKA_PUBLIC_BROADCAST_ROUTE", "/"),
-		CertPath:        env("ROOMKA_BROADCAST_CERT_PATH", ""),
-		CertKeyPath:     env("ROOMKA_BROADCAST_CERT_KEY_PATH", ""),
-		DevCertHashPort: env("ROOMKA_PUBLIC_BROADCAST_CERT_HASH_PORT", "8080"),
-		// No default: production must set a strong secret, and dev falls back to
-		// DevJWTSecret explicitly (see main). An empty value here is the signal
-		// that nothing was configured.
-		JWTSecret: env("ROOMKA_BROADCAST_JWT_SECRET", ""),
-	}
-}
-
-func env(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok {
+	var missing []string
+	get := func(key string) string {
+		value := os.Getenv(key)
+		if value == "" {
+			missing = append(missing, key)
+		}
 		return value
 	}
-	return fallback
+	cfg := Config{
+		WebTransportCert: get("ROOMKA_WEB_TRANSPORT_CERT"),
+		WebTransportPort: get("ROOMKA_WEB_TRANSPORT_PORT"),
+		APIPort:          get("ROOMKA_API_PORT"),
+		AccessSecret:     get("ROOMKA_ACCESS_SECRET"),
+	}
+	if len(missing) > 0 {
+		log.Fatalf("required environment variables not set: %s", strings.Join(missing, ", "))
+	}
+	return cfg
 }

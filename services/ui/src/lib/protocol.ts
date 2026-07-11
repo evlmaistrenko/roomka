@@ -57,10 +57,10 @@ export type FrameMeta = {
 }
 
 // AES-GCM additional authenticated data binding the ciphertext to its
-// frame-level routing metadata. The relay is untrusted, so without this it
-// could relabel a peer's still-valid ciphertext with a different senderId
-// (identity spoof) or flip the audio flag (feeding garbage into the wrong
-// decoder). We bind only the frame-invariant fields — senderId, frameId,
+// frame-level routing metadata. The broadcast server is untrusted, so without
+// this it could relabel a peer's still-valid ciphertext with a different
+// senderId (identity spoof) or flip the audio flag (feeding garbage into the
+// wrong decoder). We bind only the frame-invariant fields — senderId, frameId,
 // timestamp, flags — not chunkIndex/chunkCount, which legitimately differ
 // across the fragments of one encrypted frame. Layout (little-endian, 17 bytes):
 //   u32 senderId | u32 frameId | f64 timestamp | u8 flags
@@ -124,7 +124,7 @@ type Pending = {
 const STALE_FRAME_WINDOW = 30
 // Hard cap on in-flight partial frames across all streams — a memory backstop
 // against a flood of never-completing frames (e.g. spoofed senderIds/frameIds
-// from a malicious relay). Oldest partials are evicted past this.
+// from a malicious broadcast server). Oldest partials are evicted past this.
 const MAX_PENDING_FRAMES = 256
 // Upper bound on a frame's fragment count. maxDatagram is ~1200 bytes, so this
 // caps a single frame near ~5 MB — far above any real encoded frame, while

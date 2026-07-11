@@ -1,7 +1,7 @@
 // Package certs loads the server's TLS certificate from disk for production,
 // hot-reloading it when the files change. Renewal (e.g. via certbot) happens
-// out-of-band, and a relay shouldn't need a restart - which would drop every
-// connected client - to pick up the new cert.
+// out-of-band, and a broadcast server shouldn't need a restart - which would
+// drop every connected client - to pick up the new cert.
 package certs
 
 import (

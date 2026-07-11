@@ -7,10 +7,10 @@ import { SAFE_MAX_DATAGRAM_SIZE } from "./config"
 export type CodecFamily = "h264" | "vp8" | "vp9"
 
 // Datagram size the sharer targets. Fixed caps are clamped to the sharer's own
-// live path MTU; 'max' uses that live size uncapped. The relay forwards one
-// datagram to every viewer without re-fragmenting, so anything above ~1150 (the
-// guaranteed QUIC floor) only works if every viewer's path is wide enough too —
-// which is exactly what the larger options let you test.
+// live path MTU; 'max' uses that live size uncapped. The broadcast server
+// forwards one datagram to every viewer without re-fragmenting, so anything
+// above ~1150 (the guaranteed QUIC floor) only works if every viewer's path is
+// wide enough too — which is exactly what the larger options let you test.
 export type DatagramSizeMode = "small" | "safe" | "large" | "max"
 
 export type BroadcastConfig = {
@@ -153,7 +153,7 @@ export function buildCodecString(
 
 // Build the WebCodecs encoder config for a concrete frame size. H.264 is emitted
 // as Annex-B so SPS/PPS are inlined with every keyframe — over a lossy datagram
-// relay a late-joining or packet-dropping receiver recovers at the next keyframe
+// broadcast a late-joining or packet-dropping receiver recovers at the next keyframe
 // without an out-of-band decoder description.
 export function buildEncoderConfig(
 	config: BroadcastConfig,

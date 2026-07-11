@@ -182,9 +182,9 @@ export function startReceiving(
 				if (!frame) continue
 
 				// The payload is E2EE ciphertext; decrypt before decoding. The frame's
-				// metadata is bound as AAD, so a relay that tampered with the header
-				// fails auth here. Sustained auth failures on complete frames signal a
-				// wrong key — report it once.
+				// metadata is bound as AAD, so a broadcast server that tampered with
+				// the header fails auth here. Sustained auth failures on complete
+				// frames signal a wrong key — report it once.
 				const data = await decrypt(key, frame.data, frameAad(frame))
 				if (!data) {
 					statsFor(frame.senderId).decryptFailures++

@@ -16,10 +16,10 @@ export type ScreenShare = {
 
 // startShare captures the screen (and its audio, if shared), encodes video with
 // WebCodecs using the chosen preset's codec and audio with Opus, encrypts each
-// chunk (E2EE — the relay only sees ciphertext), and emits datagram fragments
-// through `send`. The video encoder is configured from each frame's real
-// dimensions so aspect ratio is never distorted (only the capture height is
-// constrained), and it forces a keyframe every KEYFRAME_INTERVAL_MS.
+// chunk (E2EE — the broadcast server only sees ciphertext), and emits datagram
+// fragments through `send`. The video encoder is configured from each frame's
+// real dimensions so aspect ratio is never distorted (only the capture height
+// is constrained), and it forces a keyframe every KEYFRAME_INTERVAL_MS.
 export async function startShare(
 	send: (datagram: Uint8Array) => void,
 	senderId: number,

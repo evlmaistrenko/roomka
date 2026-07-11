@@ -1,23 +1,44 @@
-// Broadcast connection parameters come from the shared ROOMKA_PUBLIC_BROADCAST_*
-// env vars (Vite exposes them via envPrefix), so host/port/route are defined
-// once in the monorepo .env and read by both the relay and this client. Falls
-// back to the dev defaults so the app still runs without a configured .env.
-const host = import.meta.env.ROOMKA_PUBLIC_BROADCAST_HOST ?? "localhost"
-const port = import.meta.env.ROOMKA_PUBLIC_BROADCAST_PORT ?? "4433"
-const route = import.meta.env.ROOMKA_PUBLIC_BROADCAST_ROUTE ?? "/"
-const certHashPort =
-	import.meta.env.ROOMKA_PUBLIC_BROADCAST_CERT_HASH_PORT ?? "8080"
+// Broadcast connection config. In production the container injects
+// window.__ROOMKA_CONFIG__ (from /config.js) so one built image serves any host;
+// in development the UI reads the same values from the shared root .env via Vite
+// (see vite.config.ts). There are no defaults — a missing value is a hard error.
+const runtime = window.__ROOMKA_CONFIG__ ?? {}
 
-export const WEBTRANSPORT_URL = `https://${host}:${port}${route}`
-export const CERT_HASH_URL = `http://${host}:${certHashPort}/cert-hash`
+function required(name: string, value: string | undefined): string {
+	if (!value) throw new Error(`missing broadcast connection config: ${name}`)
+	return value
+}
+
+const hostname = required(
+	"hostname",
+	runtime.hostname ?? import.meta.env.ROOMKA_HOSTNAME,
+)
+const webTransportPort = required(
+	"webTransportPort",
+	runtime.webTransportPort ?? import.meta.env.ROOMKA_WEB_TRANSPORT_PORT,
+)
+
+// Baked-in route contract, matching the broadcast server, Caddy, and the Vite
+// dev proxy.
+const WEB_TRANSPORT_BASE_PATH = "/"
+const API_BASE_PATH = "/api"
+
+export const WEBTRANSPORT_URL = `https://${hostname}:${webTransportPort}${WEB_TRANSPORT_BASE_PATH}`
+
+// The HTTP API is reached same-origin (Vite proxy in dev, Caddy in production),
+// so this is a relative path. The server answers with a cert hash to pin (an
+// ephemeral cert) or a null hash (a real cert — connect with normal TLS); see
+// transport.ts.
+export const CERT_HASH_URL = `${API_BASE_PATH}/cert-hash`
 
 // Video codec, resolution, framerate, and bitrate are per-share choices now —
 // see lib/video-presets.ts (the sharer picks a preset in Settings; the receiver
 // learns the codec from the stream). Only the keyframe cadence is fixed here.
 export const KEYFRAME_INTERVAL_MS = 2000
 
-// Conservative upper bound on datagram payload size. The relay bridges two
-// independent QUIC connections (sharer↔relay and relay↔viewer), each with its
+// Conservative upper bound on datagram payload size. The broadcast server
+// bridges two independent QUIC connections (sharer↔broadcast and
+// broadcast↔viewer), each with its
 // own path MTU, and forwards one datagram verbatim to every viewer — it cannot
 // re-fragment — so a datagram must fit the SMALLEST viewer's path, which the
 // sharer can't observe. QUIC guarantees any connected peer accepts a 1200-byte

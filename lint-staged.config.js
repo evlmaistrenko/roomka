@@ -13,13 +13,12 @@ export default {
 		() => "npm run lint --workspace services/ui",
 	],
 
-	// Go relay: gofmt the staged files, then vet the module.
+	// Go broadcast service: gofmt the staged files, then vet the module.
 	"services/broadcast/**/*.go": [
 		"gofmt -w",
 		() => "go -C services/broadcast vet ./...",
 	],
 
-	// graphql service + everything else Prettier can format.
-	"services/graphql/**/*.{js,ts,json,graphql,gql}": "prettier --write",
+	// Everything else Prettier can format.
 	"*.{js,ts,json,md,yml,yaml}": "prettier --write",
 }

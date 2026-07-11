@@ -1,9 +1,9 @@
 // App settings imported from a JSON file at startup and cached in localStorage:
 //   - e2eeKey: base64 of a raw 128/192/256-bit AES key, used to encrypt/decrypt
 //     the media payload (see e2ee.ts).
-//   - token:   a JWT presented to the relay to authorize the WebTransport
-//     connection (see transport.ts); the client only sanity-checks its shape —
-//     the relay verifies the signature.
+//   - token:   a JWT presented to the broadcast server to authorize the
+//     WebTransport connection (see transport.ts); the client only
+//     sanity-checks its shape — the broadcast server verifies the signature.
 
 const STORAGE_KEY = "roomka:settings"
 
