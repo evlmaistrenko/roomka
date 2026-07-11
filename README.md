@@ -51,6 +51,26 @@ services:
 docker compose up -d
 ```
 
+## Host tuning
+
+QUIC wants a large UDP receive buffer. Linux caps it low by default, so quic-go
+logs a warning at startup (`failed to sufficiently increase receive buffer
+size`) and runs with an undersized buffer — under load that means dropped
+datagrams. `net.core.rmem_max`/`wmem_max` aren't namespaced, so raise them on the
+host (not in the container); see the [quic-go note].
+
+```sh
+sudo tee /etc/sysctl.d/99-quic-buffers.conf >/dev/null <<'EOF'
+net.core.rmem_max=7500000
+net.core.wmem_max=7500000
+EOF
+sudo sysctl --system
+```
+
+Then restart the container so quic-go re-requests the buffer.
+
+[quic-go note]: https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes
+
 ## Releases
 
 Conventional commits drive [release-please]. Merging its release PR into
