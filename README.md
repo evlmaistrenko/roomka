@@ -48,7 +48,7 @@ services:
 ```
 
 ```sh
-docker compose up -d
+docker compose up -d1
 ```
 
 ## Host tuning
