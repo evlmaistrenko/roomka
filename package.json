@@ -31,7 +31,5 @@
 		"prettier": "3.4.2",
 		"prettier-plugin-jsdoc": "^1.8.1"
 	},
-	"workspaces": [
-		"services/ui"
-	]
+	"workspaces": ["services/ui"]
 }
