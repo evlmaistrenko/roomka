@@ -34,6 +34,7 @@ export function StatsOverlay({
 					["latency", config.latencyMode],
 					["hardware", config.hardwareAcceleration],
 					["datagram", config.datagramSize],
+					["kf transport", config.keyframeTransport],
 				])
 				return
 			}
@@ -68,6 +69,7 @@ export function StatsOverlay({
 				["frames", `${s.framesDecoded} dec / ${s.framesDropped} drop`],
 				["decode queue", String(s.decodeQueueSize)],
 				["datagrams", String(s.datagrams)],
+				["kf streams", String(s.keyframeStreams)],
 				["decrypt fails", String(s.decryptFailures)],
 				["decoder errs", String(s.decoderErrors)],
 				[

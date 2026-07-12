@@ -13,6 +13,15 @@ export type CodecFamily = "h264" | "vp8" | "vp9"
 // wide enough too — which is exactly what the larger options let you test.
 export type DatagramSizeMode = "small" | "safe" | "large" | "max"
 
+// How this sharer sends its video keyframes. "stream" puts each keyframe on its
+// own reliable WebTransport stream, so a single lost packet can't destroy a whole
+// group-of-pictures (deltas until the next keyframe); "datagram" fragments them
+// across unreliable datagrams like everything else — the original behavior, kept
+// as a fallback for networks or relays where streams misbehave. Deltas and audio
+// always ride datagrams. This is a send-side choice: receivers accept both and
+// adapt per sender.
+export type KeyframeTransport = "stream" | "datagram"
+
 export type BroadcastConfig = {
 	codec: CodecFamily
 	height: number
@@ -23,6 +32,7 @@ export type BroadcastConfig = {
 	keyframeIntervalMs: number
 	bitrateMode: "constant" | "variable"
 	datagramSize: DatagramSizeMode
+	keyframeTransport: KeyframeTransport
 }
 
 // --- Option lists for the Settings UI (extend freely) ---
@@ -71,6 +81,14 @@ export const DATAGRAM_SIZE_OPTIONS: {
 	{ value: "max", label: "Max (live path)" },
 ]
 
+export const KEYFRAME_TRANSPORT_OPTIONS: {
+	value: KeyframeTransport
+	label: string
+}[] = [
+	{ value: "stream", label: "Stream (reliable)" },
+	{ value: "datagram", label: "Datagram (unreliable)" },
+]
+
 export const DEFAULT_BROADCAST_CONFIG: BroadcastConfig = {
 	codec: "vp8",
 	height: 1080,
@@ -81,6 +99,7 @@ export const DEFAULT_BROADCAST_CONFIG: BroadcastConfig = {
 	keyframeIntervalMs: 2000,
 	bitrateMode: "variable",
 	datagramSize: "safe",
+	keyframeTransport: "stream",
 }
 
 // Resolve a datagram-size mode against the connection's current maxDatagramSize.
@@ -239,6 +258,11 @@ export function loadBroadcastConfig(): BroadcastConfig {
 			parsed.datagramSize,
 			DATAGRAM_SIZE_OPTIONS.map((option) => option.value),
 			d.datagramSize,
+		),
+		keyframeTransport: coerce(
+			parsed.keyframeTransport,
+			KEYFRAME_TRANSPORT_OPTIONS.map((option) => option.value),
+			d.keyframeTransport,
 		),
 	}
 }

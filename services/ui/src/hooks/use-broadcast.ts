@@ -143,6 +143,31 @@ export function useBroadcast() {
 		}
 	}, [onVideoFrame, onAudioData, onDecryptFailure])
 
+	// Send one keyframe over a fresh reliable unidirectional stream (stream mode).
+	// Best-effort like the datagram writer: if the transport is closing, opening or
+	// writing rejects, the keyframe is dropped, and the next one recovers.
+	const sendKeyframe = useCallback(async (message: Uint8Array) => {
+		const transport = transportRef.current
+		if (!transport) return
+		let writable: WritableStream
+		try {
+			writable = await transport.createUnidirectionalStream()
+		} catch {
+			return
+		}
+		const writer = writable.getWriter()
+		try {
+			await writer.write(message)
+			await writer.close()
+		} catch {
+			try {
+				await writer.abort()
+			} catch {
+				// stream already errored/closed — nothing to reclaim
+			}
+		}
+	}, [])
+
 	const startSharing = useCallback(
 		async (config: BroadcastConfig) => {
 			const writer = writerRef.current
@@ -158,6 +183,7 @@ export function useBroadcast() {
 					// closes (e.g. on stop/unmount). Swallow it so a closing transport
 					// doesn't spray unhandled rejections — real failures surface elsewhere.
 					(datagram) => void writer.write(datagram).catch(() => {}),
+					sendKeyframe,
 					senderIdRef.current,
 					// Resolve the chosen datagram-size mode against the live path MTU, read
 					// fresh each frame so a mid-session MTU drop adapts. The broadcast server
@@ -177,7 +203,7 @@ export function useBroadcast() {
 				setError(String(e))
 			}
 		},
-		[isSharing],
+		[isSharing, sendKeyframe],
 	)
 
 	const stopSharing = useCallback(() => {

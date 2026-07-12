@@ -14,6 +14,7 @@ import {
 	HARDWARE_OPTIONS,
 	HEIGHT_OPTIONS,
 	KEYFRAME_INTERVAL_OPTIONS,
+	KEYFRAME_TRANSPORT_OPTIONS,
 	LATENCY_OPTIONS,
 	isConfigSupported,
 } from "@/lib/broadcast-config"
@@ -202,6 +203,14 @@ export function SettingsDialog({
 						value={config.datagramSize}
 						options={DATAGRAM_SIZE_OPTIONS}
 						onChange={(datagramSize) => onChange({ ...config, datagramSize })}
+					/>
+					<SelectField
+						label="Keyframes"
+						value={config.keyframeTransport}
+						options={KEYFRAME_TRANSPORT_OPTIONS}
+						onChange={(keyframeTransport) =>
+							onChange({ ...config, keyframeTransport })
+						}
 					/>
 				</div>
 

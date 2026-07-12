@@ -6,8 +6,15 @@ import {
 	type FrameMeta,
 	fragment,
 	frameAad,
+	packKeyframeMessage,
 	withCodec,
 } from "./protocol"
+
+// Sends one keyframe over a reliable transport stream. Resolves once the frame is
+// handed to the transport; rejects if the stream can't be opened or written (a
+// closing transport) so the caller can log and move on — the next keyframe
+// recovers. See useBroadcast for the WebTransport implementation.
+export type KeyframeStreamSend = (message: Uint8Array) => Promise<void>
 
 export type ScreenShare = {
 	stream: MediaStream
@@ -22,6 +29,7 @@ export type ScreenShare = {
 // is constrained), and it forces a keyframe every KEYFRAME_INTERVAL_MS.
 export async function startShare(
 	send: (datagram: Uint8Array) => void,
+	sendKeyframe: KeyframeStreamSend,
 	senderId: number,
 	datagramSize: () => number,
 	config: BroadcastConfig,
@@ -42,6 +50,7 @@ export async function startShare(
 	startVideo(
 		stream,
 		send,
+		sendKeyframe,
 		senderId,
 		datagramSize,
 		key,
@@ -85,9 +94,48 @@ function makeSender(
 	}
 }
 
+// Like makeSender but for keyframes on a reliable stream. It runs independently of
+// the datagram path, so awaiting a slow keyframe stream (opening one can block on
+// flow control) never delays the delta datagrams. It sends at most one keyframe at
+// a time and, if another is produced while one is in flight, keeps only the latest
+// — a keyframe is worthless once a newer one exists. That bounds memory to one
+// pending keyframe even if a stream stalls indefinitely (e.g. a relay withholding
+// flow-control credit), instead of queueing every keyframe's payload behind it.
+function makeKeyframeStreamSender(
+	key: CryptoKey,
+	sendKeyframe: KeyframeStreamSend,
+) {
+	let queued: { meta: FrameMeta; plaintext: Uint8Array } | null = null
+	let sending = false
+
+	const pump = async () => {
+		sending = true
+		try {
+			while (queued) {
+				const { meta, plaintext } = queued
+				queued = null
+				try {
+					const ciphertext = await encrypt(key, plaintext, frameAad(meta))
+					await sendKeyframe(packKeyframeMessage(meta, ciphertext))
+				} catch (error: unknown) {
+					console.error("keyframe stream send failed", error)
+				}
+			}
+		} finally {
+			sending = false
+		}
+	}
+
+	return (meta: FrameMeta, plaintext: Uint8Array) => {
+		queued = { meta, plaintext } // latest-wins: supersede any still-pending keyframe
+		if (!sending) void pump()
+	}
+}
+
 function startVideo(
 	stream: MediaStream,
 	send: (datagram: Uint8Array) => void,
+	sendKeyframe: KeyframeStreamSend,
 	senderId: number,
 	datagramSize: () => number,
 	key: CryptoKey,
@@ -99,7 +147,16 @@ function startVideo(
 	if (!track) return
 
 	const emit = makeSender(key, send, datagramSize)
+	// In stream mode, keyframes go over a reliable stream (via their own sender);
+	// in datagram mode they're fragmented across datagrams like everything else.
+	const emitKeyframe =
+		config.keyframeTransport === "stream"
+			? makeKeyframeStreamSender(key, sendKeyframe)
+			: null
 	let frameId = 0
+	// frameId of the current group-of-pictures' keyframe, stamped on every frame so
+	// the receiver's reorder buffer knows which deltas depend on which keyframe.
+	let currentGopId = 0
 	// The full codec string the encoder is currently configured with (the level
 	// depends on the frame size, so it's resolved at configure time). Keyframes
 	// are tagged with it so the receiver configures its decoder to match.
@@ -111,16 +168,23 @@ function startVideo(
 			// Tag keyframes with the codec so the receiver can configure its decoder
 			// from the stream (senders may use different codecs); deltas go raw.
 			const keyframe = chunk.type === "key"
-			emit(
-				{
-					senderId,
-					frameId: frameId++,
-					timestamp: chunk.timestamp,
-					keyframe,
-					audio: false,
-				},
-				keyframe ? withCodec(currentCodec, bytes) : bytes,
-			)
+			const thisFrameId = frameId++
+			// A keyframe opens a new GOP (its gopId is its own frameId); deltas inherit
+			// the current GOP's id.
+			if (keyframe) currentGopId = thisFrameId
+			const meta: FrameMeta = {
+				senderId,
+				frameId: thisFrameId,
+				gopId: currentGopId,
+				timestamp: chunk.timestamp,
+				keyframe,
+				audio: false,
+			}
+			const payload = keyframe ? withCodec(currentCodec, bytes) : bytes
+			// Keyframes take the reliable stream when enabled; deltas (and keyframes
+			// in datagram mode) go over datagrams.
+			if (keyframe && emitKeyframe) emitKeyframe(meta, payload)
+			else emit(meta, payload)
 		},
 		error: (error) => console.error("video encoder error", error),
 	})
@@ -206,10 +270,14 @@ function startAudio(
 			chunk.copyTo(opus)
 			payload.set(opus, AUDIO_CONFIG_PREFIX)
 
+			const thisFrameId = frameId++
 			emit(
 				{
 					senderId,
-					frameId: frameId++,
+					frameId: thisFrameId,
+					// Audio bypasses the video reorder buffer, but the field is required;
+					// each Opus packet is independently decodable, so it's its own GOP.
+					gopId: thisFrameId,
 					timestamp: chunk.timestamp,
 					keyframe: true, // every Opus frame is independently decodable
 					audio: true,

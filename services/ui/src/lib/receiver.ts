@@ -2,10 +2,26 @@ import { AUDIO_CODEC } from "./config"
 import { decrypt, getKey } from "./e2ee"
 import {
 	AUDIO_CONFIG_PREFIX,
+	type FrameMeta,
 	Reassembler,
+	type ReorderFrame,
+	VideoReorderBuffer,
 	frameAad,
 	readCodec,
+	unpackKeyframeMessage,
 } from "./protocol"
+
+// Upper bound on a single keyframe stream. A real keyframe is well under a
+// megabyte even at 4K; this caps memory against a misbehaving or malicious relay
+// sending an unbounded stream. An oversized stream is dropped (the next keyframe
+// recovers).
+const MAX_KEYFRAME_STREAM_BYTES = 4 * 1024 * 1024
+
+// Cap on keyframe streams read concurrently. Keyframes are seconds apart, so a
+// couple are ever in flight legitimately; this bounds buffered memory
+// (≤ this × MAX_KEYFRAME_STREAM_BYTES) against a relay that opens many slow
+// streams at once. Beyond it, new incoming streams are dropped.
+const MAX_CONCURRENT_KEYFRAME_STREAMS = 8
 
 export type VideoFrameHandler = (senderId: number, frame: VideoFrame) => void
 export type AudioDataHandler = (senderId: number, data: AudioData) => void
@@ -20,6 +36,7 @@ export type ReceiverStats = {
 	height: number
 	bytes: number
 	datagrams: number
+	keyframeStreams: number // keyframes received over reliable streams
 	framesDecoded: number
 	framesDropped: number
 	decryptFailures: number
@@ -29,9 +46,7 @@ export type ReceiverStats = {
 	audioChannels: number
 }
 
-type Counters = Omit<ReceiverStats, "senderId" | "decodeQueueSize"> & {
-	lastFrameId: number // highest video frameId seen, for gap-based drop counting
-}
+type Counters = Omit<ReceiverStats, "senderId" | "decodeQueueSize">
 
 export type Receiver = {
 	stop: () => void
@@ -43,20 +58,31 @@ export type Receiver = {
 // auth failures on *complete* frames almost always mean a key mismatch, not loss.
 const DECRYPT_FAILURE_LIMIT = 15
 
-// startReceiving reads datagrams, reassembles them into encoded frames, and
-// decodes each sender's video and audio streams with their own decoders. Video
-// decoding for a sender only begins once its first keyframe arrives. If
-// decryption keeps failing, onDecryptFailure fires once (likely wrong E2EE key).
+// startReceiving reads both datagrams and reliable streams, turns them back into
+// encoded frames, and decodes each sender's video and audio with its own decoder.
+// A sender may send its keyframes over datagrams or over streams; the receiver
+// handles both simultaneously (a stream-carried keyframe is reordered ahead of
+// any deltas that overtook it — see VideoReorderBuffer). Video decoding for a
+// sender only begins once its first keyframe arrives. If decryption keeps
+// failing, onDecryptFailure fires once (likely wrong E2EE key).
 export function startReceiving(
 	transport: WebTransport,
 	onVideoFrame: VideoFrameHandler,
 	onAudioData: AudioDataHandler,
 	onDecryptFailure: () => void,
 ): Receiver {
-	const reader = transport.datagrams.readable.getReader()
+	const datagramReader = transport.datagrams.readable.getReader()
+	const streamReader = (
+		transport.incomingUnidirectionalStreams as ReadableStream<
+			ReadableStream<Uint8Array>
+		>
+	).getReader()
 	const reassembler = new Reassembler()
 	const videoDecoders = new Map<number, VideoDecoder>()
 	const audioDecoders = new Map<number, AudioDecoder>()
+	// Per-sender ordering of video frames before decode: keyframes (possibly from a
+	// stream) are reordered ahead of the datagram deltas that raced past them.
+	const videoReorder = new Map<number, VideoReorderBuffer>()
 
 	const stats = new Map<number, Counters>()
 	const statsFor = (senderId: number): Counters => {
@@ -68,17 +94,26 @@ export function startReceiving(
 				height: 0,
 				bytes: 0,
 				datagrams: 0,
+				keyframeStreams: 0,
 				framesDecoded: 0,
 				framesDropped: 0,
 				decryptFailures: 0,
 				decoderErrors: 0,
 				audioSampleRate: 0,
 				audioChannels: 0,
-				lastFrameId: -1,
 			}
 			stats.set(senderId, s)
 		}
 		return s
+	}
+
+	const reorderFor = (senderId: number): VideoReorderBuffer => {
+		let buffer = videoReorder.get(senderId)
+		if (!buffer) {
+			buffer = new VideoReorderBuffer()
+			videoReorder.set(senderId, buffer)
+		}
+		return buffer
 	}
 	// Codec each sender's video decoder is currently configured for (from the
 	// codec tag on that sender's keyframes). Absent = not yet configured.
@@ -151,22 +186,105 @@ export function startReceiving(
 		return decoder
 	}
 
+	// Decode one in-order video frame. A keyframe carries a codec tag that
+	// configures (or reconfigures, if the sender switched codecs) the decoder; a
+	// delta is only decodable once a keyframe has done so. Isolated so a single bad
+	// frame (e.g. a malformed codec tag) drops just itself.
+	const decodeVideo = (senderId: number, frame: ReorderFrame) => {
+		try {
+			let chunk = frame.data
+			if (frame.keyframe) {
+				const tagged = readCodec(frame.data)
+				chunk = tagged.chunk
+				if (videoCodecs.get(senderId) !== tagged.codec) {
+					videoDecoderFor(senderId).configure({ codec: tagged.codec })
+					videoCodecs.set(senderId, tagged.codec)
+					statsFor(senderId).codec = tagged.codec
+				}
+			} else if (!videoCodecs.has(senderId)) {
+				return // no keyframe seen yet (or decoder reset) — can't decode deltas
+			}
+			videoDecoderFor(senderId).decode(
+				new EncodedVideoChunk({
+					type: frame.keyframe ? "key" : "delta",
+					timestamp: frame.timestamp,
+					data: chunk,
+				}),
+			)
+		} catch (error) {
+			console.error("dropped video frame", error)
+		}
+	}
+
 	let stopped = false
 	let decryptFailures = 0
-	const pump = async () => {
+
+	// Shared handler for a frame from either transport (a reassembled datagram
+	// frame or a whole keyframe stream). The payload is E2EE ciphertext bound to its
+	// metadata as AAD, so a relay that tampered with the header fails auth here;
+	// sustained failures on complete frames signal a wrong key. Video is released to
+	// the decoder in frameId order (a stream keyframe may arrive after its deltas).
+	const processFrame = async (
+		key: CryptoKey,
+		meta: FrameMeta,
+		ciphertext: Uint8Array,
+	) => {
+		const data = await decrypt(key, ciphertext, frameAad(meta))
+		if (!data) {
+			statsFor(meta.senderId).decryptFailures++
+			if (++decryptFailures === DECRYPT_FAILURE_LIMIT) onDecryptFailure()
+			return
+		}
+		decryptFailures = 0
+
+		if (meta.audio) {
+			const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+			const sampleRate = view.getUint32(0, true)
+			const channels = view.getUint8(4)
+			const s = statsFor(meta.senderId)
+			s.audioSampleRate = sampleRate
+			s.audioChannels = channels
+			audioDecoderFor(meta.senderId, sampleRate, channels).decode(
+				new EncodedAudioChunk({
+					type: "key",
+					timestamp: meta.timestamp,
+					data: data.subarray(AUDIO_CONFIG_PREFIX),
+				}),
+			)
+			return
+		}
+
+		// Frames the reorder buffer skips over — a lost delta, or a keyframe too slow
+		// to wait for — count as drops.
+		const buffer = reorderFor(meta.senderId)
+		const skippedBefore = buffer.skipped
+		const released = buffer.push(
+			{
+				frameId: meta.frameId,
+				gopId: meta.gopId,
+				timestamp: meta.timestamp,
+				keyframe: meta.keyframe,
+				data,
+			},
+			performance.now(),
+		)
+		statsFor(meta.senderId).framesDropped += buffer.skipped - skippedBefore
+		for (const frame of released) decodeVideo(meta.senderId, frame)
+	}
+
+	const pumpDatagrams = async () => {
 		const key = await getKey()
 		while (!stopped) {
-			const { value, done } = await reader.read()
+			const { value, done } = await datagramReader.read()
 			if (done) break
 			if (!value) continue
 
-			// Isolate every datagram: a malformed frame (a too-short datagram, a
-			// decoder that throws InvalidStateError after going closed, a bad audio
-			// format) must drop only that frame, never tear down reception from every
-			// sender. The read() itself stays outside — its rejection ends the loop.
+			// Isolate every datagram: a malformed frame must drop only itself, never
+			// tear down reception. The read() itself stays outside — its rejection ends
+			// the loop.
 			try {
-				// Count bytes/datagrams per sender for the debug overlay (senderId is
-				// the first header field). Guarded so a runt datagram just isn't counted.
+				// Count bytes/datagrams per sender for the overlay (senderId is the first
+				// header field). Guarded so a runt datagram just isn't counted.
 				if (value.byteLength >= 4) {
 					const senderId = new DataView(
 						value.buffer,
@@ -179,84 +297,59 @@ export function startReceiving(
 				}
 
 				const frame = reassembler.push(value)
-				if (!frame) continue
-
-				// The payload is E2EE ciphertext; decrypt before decoding. The frame's
-				// metadata is bound as AAD, so a broadcast server that tampered with
-				// the header fails auth here. Sustained auth failures on complete
-				// frames signal a wrong key — report it once.
-				const data = await decrypt(key, frame.data, frameAad(frame))
-				if (!data) {
-					statsFor(frame.senderId).decryptFailures++
-					if (++decryptFailures === DECRYPT_FAILURE_LIMIT) onDecryptFailure()
-					continue
-				}
-				decryptFailures = 0
-
-				if (frame.audio) {
-					const view = new DataView(
-						data.buffer,
-						data.byteOffset,
-						data.byteLength,
-					)
-					const sampleRate = view.getUint32(0, true)
-					const channels = view.getUint8(4)
-					const s = statsFor(frame.senderId)
-					s.audioSampleRate = sampleRate
-					s.audioChannels = channels
-					audioDecoderFor(frame.senderId, sampleRate, channels).decode(
-						new EncodedAudioChunk({
-							type: "key",
-							timestamp: frame.timestamp,
-							data: data.subarray(AUDIO_CONFIG_PREFIX),
-						}),
-					)
-					continue
-				}
-
-				// Count dropped video frames from gaps in the frameId sequence (a
-				// never-reassembled frame leaves a hole). Only on forward progress;
-				// reordering is ignored and a big backward jump is treated as a restart.
-				const s = statsFor(frame.senderId)
-				if (s.lastFrameId < 0) {
-					s.lastFrameId = frame.frameId
-				} else if (frame.frameId > s.lastFrameId) {
-					const gap = frame.frameId - s.lastFrameId
-					if (gap > 1 && gap < 300) s.framesDropped += gap - 1
-					s.lastFrameId = frame.frameId
-				} else if (frame.frameId < s.lastFrameId - 100) {
-					s.lastFrameId = frame.frameId
-				}
-
-				// Keyframes carry a codec tag; configure (or reconfigure, if the sender
-				// switched codecs) the decoder from it, then decode the stripped chunk.
-				// Deltas are only decodable once a keyframe has configured the decoder.
-				let chunk = data
-				if (frame.keyframe) {
-					const tagged = readCodec(data)
-					chunk = tagged.chunk
-					if (videoCodecs.get(frame.senderId) !== tagged.codec) {
-						videoDecoderFor(frame.senderId).configure({ codec: tagged.codec })
-						videoCodecs.set(frame.senderId, tagged.codec)
-						s.codec = tagged.codec
-					}
-				} else if (!videoCodecs.has(frame.senderId)) {
-					continue // no keyframe seen yet — can't decode deltas
-				}
-				videoDecoderFor(frame.senderId).decode(
-					new EncodedVideoChunk({
-						type: frame.keyframe ? "key" : "delta",
-						timestamp: frame.timestamp,
-						data: chunk,
-					}),
-				)
+				if (frame) await processFrame(key, frame, frame.data)
 			} catch (error) {
 				console.error("dropped datagram", error)
 			}
 		}
 	}
-	void pump().catch((error: unknown) =>
+
+	// Read each keyframe stream to completion, then hand it to the shared path. The
+	// whole stream is one keyframe: [frameAad header][ciphertext].
+	const readKeyframeStream = async (
+		key: CryptoKey,
+		stream: ReadableStream<Uint8Array>,
+	) => {
+		const message = await readStreamBounded(stream, MAX_KEYFRAME_STREAM_BYTES)
+		if (!message) return // empty or oversized — dropped
+		const { meta, ciphertext } = unpackKeyframeMessage(message)
+		const s = statsFor(meta.senderId)
+		s.keyframeStreams++
+		s.bytes += message.byteLength
+		await processFrame(key, meta, ciphertext)
+	}
+
+	let activeStreamReads = 0
+	const pumpStreams = async () => {
+		const key = await getKey()
+		while (!stopped) {
+			const { value, done } = await streamReader.read()
+			if (done) break
+			if (!value) continue
+			// Bound concurrent reads: past the cap, drop (cancel) the stream rather than
+			// buffer it — a well-behaved sender never has this many keyframes in flight.
+			if (activeStreamReads >= MAX_CONCURRENT_KEYFRAME_STREAMS) {
+				void value.cancel().catch(() => {})
+				continue
+			}
+			// Read each stream independently so a slow one doesn't hold up the next; a
+			// rejection drops just that keyframe.
+			activeStreamReads++
+			void readKeyframeStream(key, value)
+				.catch((error: unknown) =>
+					console.error("dropped keyframe stream", error),
+				)
+				.finally(() => {
+					activeStreamReads--
+				})
+		}
+	}
+
+	void pumpDatagrams().catch((error: unknown) =>
 		console.error("receiver stopped", error),
+	)
+	void pumpStreams().catch((error: unknown) =>
+		console.error("receiver stream reader stopped", error),
 	)
 
 	const getStats = (): ReceiverStats[] =>
@@ -267,6 +360,7 @@ export function startReceiving(
 			height: s.height,
 			bytes: s.bytes,
 			datagrams: s.datagrams,
+			keyframeStreams: s.keyframeStreams,
 			framesDecoded: s.framesDecoded,
 			framesDropped: s.framesDropped,
 			decryptFailures: s.decryptFailures,
@@ -278,7 +372,8 @@ export function startReceiving(
 
 	const stop = () => {
 		stopped = true
-		void reader.cancel().catch(() => {})
+		void datagramReader.cancel().catch(() => {})
+		void streamReader.cancel().catch(() => {})
 		for (const decoder of videoDecoders.values()) {
 			if (decoder.state !== "closed") decoder.close()
 		}
@@ -288,4 +383,45 @@ export function startReceiving(
 	}
 
 	return { stop, getStats }
+}
+
+// Read a whole unidirectional stream into one buffer, returning null if it's
+// empty or exceeds max (in which case the read is cancelled — the stream is
+// abandoned). Reads incrementally so an oversized stream is cut off early rather
+// than fully buffered.
+async function readStreamBounded(
+	stream: ReadableStream<Uint8Array>,
+	max: number,
+): Promise<Uint8Array | null> {
+	const reader = stream.getReader()
+	const chunks: Uint8Array[] = []
+	let total = 0
+	try {
+		for (;;) {
+			const { value, done } = await reader.read()
+			if (done) break
+			if (!value) continue
+			total += value.byteLength
+			if (total > max) {
+				await reader.cancel().catch(() => {})
+				return null
+			}
+			chunks.push(value)
+		}
+	} finally {
+		try {
+			reader.releaseLock()
+		} catch {
+			// already released (e.g. after cancel) — nothing to do
+		}
+	}
+	if (total === 0) return null
+	if (chunks.length === 1) return chunks[0]
+	const out = new Uint8Array(total)
+	let offset = 0
+	for (const chunk of chunks) {
+		out.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	return out
 }
