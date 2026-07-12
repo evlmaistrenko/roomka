@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/evlmaistrenko/roomka/compare/roomka-v0.3.0...roomka-v0.4.0) (2026-07-12)
+
+
+### Features
+
+* show app version in settings dialog ([#10](https://github.com/evlmaistrenko/roomka/issues/10)) ([752b6f4](https://github.com/evlmaistrenko/roomka/commit/752b6f417d32ffba765b6de387936006c90b1831))
+
 ## [0.3.0](https://github.com/evlmaistrenko/roomka/compare/roomka-v0.2.1...roomka-v0.3.0) (2026-07-12)
 
 
