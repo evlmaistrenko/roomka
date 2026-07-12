@@ -231,7 +231,7 @@ export function SettingsDialog({
 					<ThemeToggle />
 				</div>
 
-				<div className="mt-4 border-t pt-4">
+				<div className="mt-4 flex items-center justify-between gap-2 border-t pt-4">
 					<Button
 						variant="outline"
 						size="sm"
@@ -242,6 +242,9 @@ export function SettingsDialog({
 					>
 						<KeyRound /> Replace settings file
 					</Button>
+					<span className="text-xs text-muted-foreground">
+						v{__APP_VERSION__}
+					</span>
 				</div>
 			</div>
 		</div>
