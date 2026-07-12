@@ -7,6 +7,10 @@ interface ImportMetaEnv {
 	readonly ROOMKA_WEB_TRANSPORT_PORT?: string
 }
 
+// The monorepo root package.json version, inlined at build time (see
+// vite.config.ts) and shown in the settings dialog.
+declare const __APP_VERSION__: string
+
 // Runtime config injected by the container via /config.js (see the entrypoint),
 // so one image serves any host.
 interface Window {
