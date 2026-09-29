@@ -6,8 +6,7 @@ This file only adds what matters specifically when an agent does the work.
 
 ## Scope
 
-- `services/control` and `services/ui` are live. `services/broadcast` is
-  retired: don't extend it or fix it, only delete from it.
+- The live services are `services/control` and `services/ui`.
 - The control server's contracts are `packages/control-specs/`: the GraphQL
   SDL in `graphql/`, the HTTP surface in `openapi.yaml`. After touching
   either, run `npm run generate:control` yourself: don't rely on a watcher

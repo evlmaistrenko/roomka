@@ -143,10 +143,6 @@ vite.config.ts.timestamp-*
 .vite/
 
 # Go build artifacts
-services/broadcast/broadcast
-services/broadcast/broadcast.exe
-services/broadcast/tmp/
-services/broadcast/build-errors.log
 services/control/control
 services/control/control.exe
 services/control/tmp/

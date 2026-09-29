@@ -9,7 +9,5 @@ node_modules
 **/dist
 .env
 .env.*
-# Retired, and not part of the image.
-services/broadcast
 # air's build output and scratch.
 services/control/tmp

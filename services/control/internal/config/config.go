@@ -1,8 +1,7 @@
 // Package config reads the control server's settings from the environment. Every
 // value is a required ROOMKA_* variable with no default — a missing one is a hard
-// startup error, so the running configuration is always explicit (same contract
-// as the retired broadcast server). The few optional ones are marked where they
-// are read.
+// startup error, so the running configuration is always explicit. The few
+// optional ones are marked where they are read.
 package config
 
 import (

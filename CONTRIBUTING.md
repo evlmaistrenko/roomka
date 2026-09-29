@@ -2,13 +2,12 @@
 
 ## Repository
 
-| Path                     | What it is                                          |
-| ------------------------ | --------------------------------------------------- |
-| `services/control`       | Go GraphQL server: accounts, sessions, access       |
-| `services/ui`            | React client (npm workspace)                        |
-| `services/broadcast`     | Retired WebTransport relay, kept until it's deleted |
-| `packages/control-specs` | Contracts of `services/control`: GraphQL, OpenAPI   |
-| `.runtime`               | Local state of the dev tooling (gitignored)         |
+| Path                     | What it is                                        |
+| ------------------------ | ------------------------------------------------- |
+| `services/control`       | Go GraphQL server: accounts, sessions, access     |
+| `services/ui`            | React client (npm workspace)                      |
+| `packages/control-specs` | Contracts of `services/control`: GraphQL, OpenAPI |
+| `.runtime`               | Local state of the dev tooling (gitignored)       |
 
 `services/` holds what runs; `packages/` holds what the services are built from
 but does not run by itself. Directories directly under both are kebab-case. A
