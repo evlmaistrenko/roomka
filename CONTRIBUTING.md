@@ -364,6 +364,30 @@ person who watches a stream is a `Reader`, never a viewer.
   and ends without an error when the access behind it changes: it never
   re-checks permissions on its own.
 
+### Migrations
+
+The server applies every pending migration when it starts, before it serves
+anything; a migration that fails stops it. There is no separate migration step
+in a deployment.
+
+- **A migration only adds.** Tables, columns, indexes. Removing or renaming
+  takes two releases: one where the code stops using the old thing, and a later
+  one whose migration drops it. That is what makes a rollback safe: rolling
+  back is starting the previous image, and the previous code has to run on the
+  newer schema, because it knows nothing of the newer migrations, their down
+  functions included. Down functions are for development; nothing in a
+  deployment runs them.
+- **A shipped migration never changes.** Its effect on a database has to be the
+  same on every database it ever runs on. A migration that builds from the
+  types in `internal/model` creates whatever the models say today, so it may do
+  that only until it ships: the base migration builds from the models now,
+  because nothing but development databases exists, and is written out on its
+  own terms at the first release. From then on, every change to the schema is a
+  new migration.
+- **Backups are not the server's job.** They are taken regularly, outside the
+  app, by whoever runs it: the database is a single sqlite file in the data
+  volume.
+
 ### Comments
 
 A doc comment on a service method that answers a GraphQL field starts with the
