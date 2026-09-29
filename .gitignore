@@ -147,6 +147,18 @@ services/broadcast/broadcast
 services/broadcast/broadcast.exe
 services/broadcast/tmp/
 services/broadcast/build-errors.log
+services/control/control
+services/control/control.exe
+services/control/tmp/
+
+# Local state the dev tooling keeps between runs, one subdirectory per service
+/.runtime/
+
+# Local working notes, never committed (see CONTRIBUTING.md)
+/.notes/
+
+# Dev sqlite database (ROOMKA_DATABASE_PATH)
+/data/
 
 # Imported app settings — contain a live JWT + E2EE key, never commit
 settings.local.json

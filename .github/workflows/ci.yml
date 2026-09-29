@@ -34,18 +34,31 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: services/broadcast/go.mod
-          cache-dependency-path: services/broadcast/go.sum
+          go-version-file: services/control/go.mod
+          cache-dependency-path: services/control/go.sum
       - name: gofmt
         run: |
-          unformatted=$(gofmt -l services/broadcast)
+          unformatted=$(gofmt -l services/control)
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt-ed:"
             echo "$unformatted"
             exit 1
           fi
       - name: go vet
-        run: go -C services/broadcast vet ./...
+        run: go -C services/control vet ./...
+
+      # Generated code is committed with the source it comes from. Regenerate
+      # both and fail if anything moved: a spec or an operation changed without
+      # its output.
+      - name: Generated code is up to date
+        run: |
+          npm run generate:control
+          npm run generate:ui
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Regenerating changed these files; run npm run generate:control and npm run generate:ui, and commit the result:"
+            git status --porcelain
+            exit 1
+          fi
 
   test:
     runs-on: ubuntu-latest
@@ -53,7 +66,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: services/broadcast/go.mod
-          cache-dependency-path: services/broadcast/go.sum
+          go-version-file: services/control/go.mod
+          cache-dependency-path: services/control/go.sum
       - name: go test
-        run: go -C services/broadcast test ./...
+        run: go -C services/control test ./...
+
+  # Builds the image the release would publish, without pushing it, so a
+  # Dockerfile that no longer builds shows up here rather than at release.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

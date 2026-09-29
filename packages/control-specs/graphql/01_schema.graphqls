@@ -1,0 +1,81 @@
+"""
+A base schema to build a small self-hosted service on: accounts,
+authentication, access control. Business logic is built on top. HTTP for
+queries and mutations, a WebSocket for subscriptions.
+
+Failures arrive in `errors`; see `ErrorCode`.
+
+## Authentication
+
+A session, sliding while used, is the only credential — see `Session`.
+
+### Session cookie
+
+`__Host-sid`, an opaque value the server matches to a session. Slides with
+it: sent again, `Max-Age` restarted, on any response whose request extended
+the session — see `Session.expiresAt`.
+
+Set:
+
+```
+Set-Cookie: __Host-sid=<sid>; Path=/; Secure; HttpOnly; SameSite=Strict;
+            Max-Age=<sessionTtlSeconds>
+```
+
+Cleared:
+
+```
+Set-Cookie: __Host-sid=; Path=/; Secure; HttpOnly; SameSite=Strict;
+            Max-Age=0
+```
+
+## Access
+
+- What a field requires: `@auth` — see `Permission`
+- Rank no directive declares, and the server enforces anyway — see
+  `User.rank`
+
+## Paths
+
+```
+setupRequired -> setup -> me
+login -> me
+STEP_UP_REQUIRED -> stepUp -> retry unchanged
+requestPasswordReset -> secret -> setPassword
+createUser -> secret -> setPassword
+users(filter, after) + usersChanged -> refetch
+```
+"""
+schema {
+  # For whoever implements this: CORS is closed, and `Origin` is checked on
+  # every call that carries the cookie.
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+type Query
+
+type Mutation
+
+"""
+Subscriptions run over a WebSocket, subprotocol `graphql-transport-ws`. The
+session cookie travels on the handshake, which is an ordinary HTTP request,
+and the browser sends it by itself. Nothing authenticates inside the socket.
+
+A field here emits once on subscribe, carrying the state at that moment, and
+again on each change. So a client needs no query to start from, and a first
+event does not mean something changed.
+
+A subscription ends as soon as access changes: any revocation, or any change
+of permissions, closes every subscription on that session. The stream just
+completes, with no error. Subscribe again. If the session is gone, that
+attempt fails. A session that expires under a live socket closes the socket
+itself, with code `4403`.
+
+One socket is enough for a client, and a socket is limited: 50 subscriptions
+at once (another fails with `LIMIT_REACHED`), and operations started no faster
+than 10 a second (faster ones fail with `RATE_LIMITED`). One address holds at
+most 20 sockets; the handshake of another is refused with `429`.
+"""
+type Subscription

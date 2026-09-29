@@ -1,0 +1,21 @@
+# GraphQL Config — picked up by the "GraphQL: Language Feature Support" VS Code
+# extension (graphql.vscode-graphql) to give autocomplete, validation, hover and
+# go-to-definition over the control server's schema.
+# Docs: https://the-guild.dev/graphql/config/docs
+
+# The control server's SDL, split by subject into numbered files.
+schema: packages/control-specs/graphql/*.graphqls
+
+# Where operations live: the graphql(`…`) calls in the UI, as in
+# services/ui/codegen.ts. The generated code repeats every operation, so it is
+# left out.
+documents:
+  - services/ui/src/**/*.{ts,tsx}
+  - "!services/ui/src/graphql/generated/**"
+
+extensions:
+  # Powers the "Execute Query" code lens above operations in .graphql files.
+  # Matches ROOMKA_API_PORT from .env.example — adjust if you change the port.
+  endpoints:
+    default:
+      url: http://localhost:8080/graphql

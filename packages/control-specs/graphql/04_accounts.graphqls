@@ -1,0 +1,358 @@
+"""
+A field without it is public. It declares RBAC and step-up; rank the server
+enforces without declaring.
+"""
+directive @auth(
+  """
+  The permission this field requires.
+  """
+  permission: Permission
+  """
+  Whether the session must be raised by `stepUp`, and still within its
+  `stepUpExpiresAt`.
+  """
+  stepUp: Boolean! = false
+) on FIELD_DEFINITION
+
+directive @grants(permissions: [Permission!]!) on ENUM_VALUE
+
+enum Permission {
+  USER_MANAGE
+}
+
+# Applied directives are invisible to introspection, so each value repeats
+# its grants in the description.
+enum Role {
+  """
+  Grants `USER_MANAGE`.
+  """
+  ADMIN @grants(permissions: [USER_MANAGE])
+}
+
+type User {
+  id: ID!
+  username: String!
+  displayName: String!
+  """
+  A user acts only on lower ranks, and assigns no rank but a lower one.
+  """
+  rank: Int!
+  roles: [Role!]!
+  directPermissions: [Permission!]!
+  """
+  Direct plus roles.
+  """
+  permissions: [Permission!]!
+  """
+  `null` when a password was never set, or once `resetUserCredentials` cleared
+  it. `setPassword` fills it.
+  """
+  passwordSetAt: DateTime
+  createdAt: DateTime!
+}
+
+"""
+Client-defined and opaque to the server, which stores and returns it
+unchanged.
+"""
+type Preference {
+  key: String!
+  value: String!
+}
+
+type Viewer {
+  user: User!
+  """
+  What the current session allows.
+  """
+  permissions: [Permission!]!
+  session: Session!
+  preferences: [Preference!]!
+}
+
+"""
+Server-side authentication state.
+"""
+type Session {
+  id: ID!
+  lastUserAgent: String
+  current: Boolean!
+  lastIpAddress: String
+  createdAt: DateTime!
+  """
+  Set whenever a request carries the session id.
+  """
+  lastUsedAt: DateTime!
+  """
+  Sliding: extended by a full term on any use in the last third.
+  """
+  expiresAt: DateTime!
+  """
+  When step-up lapses, 30 minutes from the last password proved. `null` when
+  the session is not raised.
+  """
+  stepUpExpiresAt: DateTime
+  """
+  `null` while live. Once set, the session is over whatever `expiresAt` says.
+  """
+  endedAt: DateTime
+}
+
+type PasswordResetInfo {
+  username: String!
+  """
+  15 minutes from issue.
+  """
+  expiresAt: DateTime!
+}
+
+input SessionFilterInput {
+  """
+  `true` finds the live ones, `false` the ended.
+  """
+  live: Boolean
+  """
+  Case-insensitive substring of `lastUserAgent`.
+  """
+  userAgent: String
+  createdAfter: DateTime
+  createdBefore: DateTime
+  endedAfter: DateTime
+  endedBefore: DateTime
+}
+
+enum SessionSort {
+  CREATED_DESC
+  CREATED_ASC
+  LAST_USED_DESC
+  LAST_USED_ASC
+  ENDED_DESC
+  ENDED_ASC
+}
+
+enum UserSort {
+  CREATED_DESC
+  CREATED_ASC
+  USERNAME_ASC
+  USERNAME_DESC
+  RANK_DESC
+  RANK_ASC
+}
+
+input UserFilterInput {
+  """
+  Case-insensitive substring of `username` or `displayName`.
+  """
+  search: String
+  role: Role
+  """
+  `false` finds those who have yet to finish a first sign-in.
+  """
+  hasPassword: Boolean
+  createdAfter: DateTime
+  createdBefore: DateTime
+}
+
+type UserPage {
+  items: [User!]!
+  pageInfo: PageInfo!
+  """
+  Matching users, not all of them.
+  """
+  totalCount: Int!
+}
+
+input SetupInput {
+  username: String!
+    @constraint(minLength: 3, maxLength: 32, pattern: "^[a-z][a-z0-9]*$")
+  displayName: String!
+    @constraint(minLength: 3, maxLength: 32, pattern: "^\\p{L}(.*\\S)?$")
+  password: String! @constraint(minLength: 12, maxLength: 128)
+  sessionTtlSeconds: Int! = 86400 @constraint(min: 3600, max: 2592000)
+}
+
+input LoginInput {
+  username: String!
+  password: String!
+  sessionTtlSeconds: Int! = 86400 @constraint(min: 3600, max: 2592000)
+}
+
+input SetPasswordInput {
+  password: String! @constraint(minLength: 12, maxLength: 128)
+  sessionTtlSeconds: Int! = 86400 @constraint(min: 3600, max: 2592000)
+}
+
+input StepUpInput {
+  password: String!
+}
+
+input ChangePasswordInput {
+  currentPassword: String!
+  newPassword: String! @constraint(minLength: 12, maxLength: 128)
+}
+
+"""
+At least one value required.
+"""
+input UpdateProfileInput {
+  displayName: String
+    @constraint(minLength: 3, maxLength: 32, pattern: "^\\p{L}(.*\\S)?$")
+}
+
+input SetPreferenceInput {
+  """
+  `null` removes the key.
+  """
+  value: String @constraint(minLength: 1, maxLength: 4096)
+}
+
+input CreateUserInput {
+  username: String!
+    @constraint(minLength: 3, maxLength: 32, pattern: "^[a-z][a-z0-9]*$")
+  displayName: String!
+    @constraint(minLength: 3, maxLength: 32, pattern: "^\\p{L}(.*\\S)?$")
+  roles: [Role!]
+  permissions: [Permission!]
+  rank: Int! = 0 @constraint(min: 0, max: 99)
+}
+
+input SetUserRolesInput {
+  roles: [Role!]!
+}
+
+input SetUserPermissionsInput {
+  permissions: [Permission!]!
+}
+
+input SetUserRankInput {
+  rank: Int! @constraint(min: 0, max: 99)
+}
+
+extend type Query {
+  setupRequired: Boolean!
+  passwordResetInfo(secret: String!): PasswordResetInfo
+
+  """
+  `null` when not signed in.
+  """
+  me: Viewer
+  """
+  Yours, live and ended.
+  """
+  sessions(
+    filter: SessionFilterInput
+    sortBy: SessionSort = CREATED_DESC
+    limit: Int! = 50 @constraint(min: 1, max: 100)
+  ): [Session!]! @auth
+
+  users(
+    filter: UserFilterInput
+    sortBy: UserSort = CREATED_DESC
+    after: String
+    limit: Int! = 50 @constraint(min: 1, max: 100)
+  ): UserPage! @auth(permission: USER_MANAGE)
+}
+
+extend type Mutation {
+  """
+  - Creates the root user: `ADMIN`, at rank 100, which no one else reaches
+  - No one can demote the root user, delete them, or reset their
+    credentials
+  - Issues a session
+  - Sets the session cookie
+  - Does nothing and returns `null` once a user exists
+  """
+  setup(input: SetupInput!): Viewer
+  """
+  - Issues a session
+  - Sets the session cookie
+  - Ends the session with the oldest `Session.lastUsedAt` when the user is
+    at 10 live ones
+  """
+  login(input: LoginInput!): Viewer!
+  """
+  - Succeeds whether or not the username exists
+  - Prints the secret to the server console
+  - The current password goes on working until `setPassword` replaces it
+  - A secret left unused expires
+  - Within a minute of the last secret, a new request leaves that secret in
+    place and answers the same
+  """
+  requestPasswordReset(username: String!): Void
+  """
+  - Ends every session the user had
+  - Issues a new one
+  - Sets the session cookie
+  """
+  setPassword(secret: String!, input: SetPasswordInput!): Viewer!
+
+  """
+  - Ends the session
+  - Clears the session cookie
+  """
+  logout: Void @auth
+  """
+  Raises the session again — see `Session.stepUpExpiresAt`.
+  """
+  stepUp(input: StepUpInput!): Viewer! @auth
+  """
+  Ends every other session.
+  """
+  changePassword(input: ChangePasswordInput!): Viewer! @auth
+  updateProfile(input: UpdateProfileInput!): Viewer! @auth
+  """
+  A new key past 100 fails with `LIMIT_REACHED`.
+  """
+  setPreference(
+    key: String! @constraint(minLength: 1, maxLength: 64)
+    input: SetPreferenceInput!
+  ): [Preference!]! @auth
+
+  revokeSession(
+    """
+    Any but the current one.
+    """
+    sessionId: ID!
+  ): [Session!]! @auth
+  revokeOtherSessions: [Session!]! @auth
+
+  """
+  - Creates a user without a password
+  - Prints a reset secret to the server console
+  """
+  createUser(input: CreateUserInput!): User!
+    @auth(permission: USER_MANAGE, stepUp: true)
+  """
+  Takes the user's sessions and preferences with them.
+  """
+  deleteUser(userId: ID!): Void @auth(permission: USER_MANAGE, stepUp: true)
+  """
+  - Clears the password at once, leaving the account without one until
+    `setPassword`
+  - Ends every session the user has
+  - Issues the secret right away, rather than on the user's request, and
+    prints it to the server console
+  """
+  resetUserCredentials(userId: ID!): User!
+    @auth(permission: USER_MANAGE, stepUp: true)
+  setUserRoles(userId: ID!, input: SetUserRolesInput!): User!
+    @auth(permission: USER_MANAGE, stepUp: true)
+  setUserPermissions(userId: ID!, input: SetUserPermissionsInput!): User!
+    @auth(permission: USER_MANAGE, stepUp: true)
+  setUserRank(userId: ID!, input: SetUserRankInput!): User!
+    @auth(permission: USER_MANAGE, stepUp: true)
+}
+
+extend type Subscription {
+  me: Viewer! @auth
+  sessions(
+    filter: SessionFilterInput
+    sortBy: SessionSort = CREATED_DESC
+    limit: Int! = 50 @constraint(min: 1, max: 100)
+  ): [Session!]! @auth
+
+  """
+  Refetch on it.
+  """
+  usersChanged: Void @auth(permission: USER_MANAGE)
+}

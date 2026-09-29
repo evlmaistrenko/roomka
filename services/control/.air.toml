@@ -1,0 +1,14 @@
+# air (npm run dev:control) rebuilds and restarts the server on every change.
+# Only what differs from air's defaults is set here.
+
+[build]
+# gqlgen deletes these two at the start of a run and writes them back seconds
+# later, so a build triggered by them would see half a package. They are not
+# watched. Instead scripts/generate.js writes a schema hash after a successful
+# run, and that one event starts the build. Regexes rather than exclude_file,
+# which compares paths with the OS separator.
+exclude_regex = ["_test\\.go$", "generated\\.go$", "models_gen\\.go$"]
+# Where that hash lives. It is outside this directory, so it is matched by
+# extension: include_file would compare a relative path, separators and all.
+include_dir = ["../../.runtime/control"]
+include_ext = ["go", "tpl", "tmpl", "html", "sha256"]

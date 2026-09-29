@@ -13,10 +13,10 @@ export default {
 		() => "npm run lint --workspace services/ui",
 	],
 
-	// Go broadcast service: gofmt the staged files, then vet the module.
-	"services/broadcast/**/*.go": [
+	// Go control service: gofmt the staged files, then vet the module.
+	"services/control/**/*.go": [
 		"gofmt -w",
-		() => "go -C services/broadcast vet ./...",
+		() => "go -C services/control vet ./...",
 	],
 
 	// Everything else Prettier can format.

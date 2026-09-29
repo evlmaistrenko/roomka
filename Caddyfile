@@ -1,29 +1,36 @@
 {
 	email {$ROOMKA_ACME_EMAIL}
-	# Pin the ACME CA to Let's Encrypt so the issued cert lands at a predictable
-	# storage path — the entrypoint points the broadcast server's cert there.
-	acme_ca https://acme-v02.api.letsencrypt.org/directory
-	# Disable HTTP/3 so Caddy doesn't bind 443/udp — the broadcast server owns that
-	# port for WebTransport. The UI is still served over HTTP/1.1 + HTTP/2 on
-	# 443/tcp, which doesn't collide since TCP and UDP ports are independent. This
-	# keeps the image down to just 80, 443, and 443/udp.
-	servers {
-		protocols h1 h2
-	}
 }
 
 {$ROOMKA_HOSTNAME} {
-	# broadcast's HTTP API (cert-hash now, more later) — reverse-proxied so the UI
-	# reaches it same-origin over https.
-	handle /api/* {
-		reverse_proxy localhost:{$ROOMKA_API_PORT}
+	# The control server: GraphQL over HTTP, the subscription WebSocket on the
+	# same path, and the tools over both (Apollo Sandbox at /graphql/playground,
+	# Swagger UI at /openapi). /health stays unpublished: only the container's
+	# own health check asks it.
+	#
+	# Caddy replaces X-Forwarded-For with the address it sees, and control
+	# believes that header only from loopback, which is where Caddy is. The
+	# Host header passes through unchanged, which the WebSocket upgrade checks
+	# the Origin against.
+	@control path /graphql /graphql/* /openapi /openapi/* /openapi.json
+	handle @control {
+		reverse_proxy 127.0.0.1:{$ROOMKA_API_PORT}
 	}
-	# Everything else: the UI.
+
+	# Everything else is the UI.
 	handle {
 		root * /srv
-		encode gzip
-		# SPA: serve real files (assets, /config.js), fall back to index.html so
-		# client-side routes (e.g. /import) resolve.
+		encode zstd gzip
+
+		# Vite names every asset after its content, so an asset never changes
+		# under its name. index.html does change, and names the new ones.
+		@assets path /assets/*
+		@notAssets not path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		header @notAssets Cache-Control "no-cache"
+
+		# A single-page app: a path that is not a file is a route, and the
+		# UI's router takes it from index.html.
 		try_files {path} /index.html
 		file_server
 	}

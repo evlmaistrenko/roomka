@@ -1,21 +1,5 @@
 /// <reference types="vite/client" />
 
-interface ImportMetaEnv {
-	// Only these non-secret connection values reach the client bundle (whitelisted
-	// in vite.config.ts). ROOMKA_ACCESS_SECRET must never appear here.
-	readonly ROOMKA_HOSTNAME?: string
-	readonly ROOMKA_WEB_TRANSPORT_PORT?: string
-}
-
 // The monorepo root package.json version, inlined at build time (see
-// vite.config.ts) and shown in the settings dialog.
+// vite.config.ts) and shown in the user menu.
 declare const __APP_VERSION__: string
-
-// Runtime config injected by the container via /config.js (see the entrypoint),
-// so one image serves any host.
-interface Window {
-	__ROOMKA_CONFIG__?: {
-		hostname?: string
-		webTransportPort?: string
-	}
-}

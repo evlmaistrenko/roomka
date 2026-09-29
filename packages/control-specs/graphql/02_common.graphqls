@@ -1,0 +1,38 @@
+"""
+Always UTC.
+"""
+scalar DateTime @specifiedBy(url: "https://www.rfc-editor.org/rfc/rfc3339.html")
+
+"""
+Always `null`.
+"""
+scalar Void
+
+"""
+A value must pass every argument given here. Failing one rejects the call.
+"""
+directive @constraint(
+  minLength: Int
+  maxLength: Int
+  """
+  An ECMAScript regular expression, applied with the `u` flag.
+  """
+  pattern: String
+  min: Int
+  max: Int
+) on INPUT_FIELD_DEFINITION | ARGUMENT_DEFINITION
+
+extend type Query {
+  """
+  The server's own version, as semver.
+  """
+  version: String!
+}
+
+type PageInfo {
+  """
+  Opaque and stable. Only valid with the same `filter` and `sortBy`.
+  """
+  endCursor: String
+  hasNextPage: Boolean!
+}

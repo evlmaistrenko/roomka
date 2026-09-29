@@ -13,10 +13,14 @@
 	"license": "MIT",
 	"type": "module",
 	"scripts": {
-		"dev:broadcast": "dotenv -e .env -- go -C services/broadcast tool air",
+		"generate:control": "go -C services/control generate ./...",
+		"generate:ui": "npm run generate -w services/ui",
+		"dev:control": "node services/control/scripts/generate.js && dotenv -e .env -- go -C services/control tool air",
+		"dev:control-specs": "node services/control/scripts/generate.js --watch",
 		"dev:ui": "dotenv -e .env -- npm run dev -w services/ui",
+		"dev:ui-documents": "npm run generate -w services/ui -- --watch",
 		"dev": "concurrently npm:dev:*",
-		"test:broadcast": "dotenv -e .env -- go -C services/broadcast test ./...",
+		"test:control": "dotenv -e .env -- go -C services/control test ./...",
 		"test": "concurrently npm:test:*",
 		"prepare": "husky"
 	},

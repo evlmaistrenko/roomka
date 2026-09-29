@@ -1,0 +1,6 @@
+# Files that run inside the Linux image keep LF on every checkout: with
+# core.autocrlf on Windows, a CRLF entrypoint would be copied into the image
+# and fail to start.
+*.sh text eol=lf
+Caddyfile text eol=lf
+Dockerfile text eol=lf

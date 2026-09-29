@@ -1,0 +1,31 @@
+# The contract lives in its own monorepo package, apart from any code generated
+# from it. Split by subject and numbered for reading order; gqlgen merges the
+# files, and the numbers carry no meaning for it.
+schema:
+  - ../../packages/control-specs/graphql/*.graphqls
+
+exec:
+  filename: graph/generated.go
+  package: graph
+
+# The contract's types live apart from the resolvers that answer with them, so
+# graph/ holds code somebody writes rather than code somebody generates. It also
+# reads well at the call sites: schema.Session is the API's, model.Session is the
+# store's row.
+model:
+  filename: internal/schema/models_gen.go
+  package: schema
+
+resolver:
+  layout: follow-schema
+  dir: graph
+  package: graph
+  filename_template: "{name}_resolvers.go"
+
+# Custom scalar bindings. DateTime is an RFC 3339 time.Time; Void is defined by
+# hand next to the generated types, in internal/schema/void.go.
+models:
+  DateTime:
+    model: github.com/99designs/gqlgen/graphql.Time
+  Void:
+    model: control/internal/schema.Void

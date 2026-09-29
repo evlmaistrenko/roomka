@@ -1,0 +1,204 @@
+openapi: 3.0.3
+
+info:
+  title: roomka control
+  version: dev
+  description: |
+    The control server's HTTP surface.
+
+    GraphQL is the API, and its contract is the SDL in `graphql/` next to this
+    file. Here `/graphql` is described only as a transport: methods, content
+    types, the WebSocket upgrade, and the cookie. Everything that is not
+    GraphQL (health, and later uploads and the like) is described in full.
+
+    Any request carrying the session cookie must come from an allowed
+    `Origin` (the UI, or this server itself) or it is refused with `403`.
+    A request without an `Origin` header is not a browser request and is not
+    checked.
+
+    Every request but the health check counts against its address: about 20
+    a second, with room for bursts. Past that it is refused with `429` and a
+    `Retry-After`. A request body over 1 MiB is refused with `413`, and a
+    request must arrive, and its response leave, within 30 seconds; the
+    subscription WebSocket is exempt from that once open.
+
+tags:
+  - name: graphql
+    description: |
+      Transport only; operations are in the SDL. Not generated into Go:
+      gqlgen owns this endpoint.
+    externalDocs:
+      description: The GraphQL SDL
+      url: https://github.com/evlmaistrenko/roomka/tree/master/packages/control-specs/graphql
+  - name: system
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [system]
+      summary: Liveness
+      description: Answers as long as the process serves HTTP. Checks nothing else.
+      responses:
+        "200":
+          description: Alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                enum: [ok]
+
+  /graphql:
+    post:
+      operationId: executeGraphql
+      tags: [graphql]
+      summary: A query or a mutation
+      security:
+        - {}
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GraphqlRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/GraphqlResult"
+        "403":
+          $ref: "#/components/responses/OriginNotAllowed"
+        "413":
+          description: The body is over 1 MiB.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "422":
+          $ref: "#/components/responses/GraphqlResult"
+    get:
+      operationId: executeGraphqlOverGet
+      tags: [graphql]
+      summary: A query in the URL, or the subscription WebSocket
+      description: |
+        Without an upgrade: a query (never a mutation) in the query string.
+
+        With `Upgrade: websocket` and subprotocol `graphql-transport-ws`: the
+        socket subscriptions run on. The cookie goes on the handshake; nothing
+        authenticates inside the socket. A socket whose session ends is closed
+        with code `4403`.
+      security:
+        - {}
+        - sessionCookie: []
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: operationName
+          in: query
+          schema:
+            type: string
+        - name: variables
+          in: query
+          description: JSON-encoded
+          schema:
+            type: string
+        - name: extensions
+          in: query
+          description: JSON-encoded
+          schema:
+            type: string
+      responses:
+        "101":
+          description: Switched to the subscription WebSocket
+        "200":
+          $ref: "#/components/responses/GraphqlResult"
+        "403":
+          $ref: "#/components/responses/OriginNotAllowed"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "422":
+          $ref: "#/components/responses/GraphqlResult"
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-sid
+      description: |
+        Set and cleared by the GraphQL mutations that sign in and out; see
+        `Session` in the SDL. Optional on every endpoint: what a caller may do
+        without it is decided per field.
+
+  schemas:
+    GraphqlRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        operationName:
+          type: string
+        variables:
+          type: object
+          additionalProperties: true
+        extensions:
+          type: object
+          additionalProperties: true
+
+    GraphqlResponse:
+      type: object
+      description: |
+        `errors` entries carry `extensions.code` from the SDL's `ErrorCode`.
+      properties:
+        data:
+          type: object
+          nullable: true
+          additionalProperties: true
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        extensions:
+          type: object
+          additionalProperties: true
+
+  responses:
+    GraphqlResult:
+      description: |
+        A GraphQL result. `422` when the document itself is unparseable or
+        invalid, `200` otherwise, including when fields failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GraphqlResponse"
+        application/graphql-response+json:
+          schema:
+            $ref: "#/components/schemas/GraphqlResponse"
+
+    TooManyRequests:
+      description: |
+        Too many requests from this address, or on the handshake, too many
+        sockets already open from it. A rate refusal says when to come back;
+        a socket refusal does not, since a slot frees only when a socket
+        closes.
+      headers:
+        Retry-After:
+          description: Seconds until the next request will be let through.
+          schema:
+            type: integer
+      content:
+        text/plain:
+          schema:
+            type: string
+
+    OriginNotAllowed:
+      description: The session cookie came with a foreign `Origin`.
+      content:
+        text/plain:
+          schema:
+            type: string

@@ -1,55 +1,40 @@
 #!/bin/sh
-# Runs Caddy (serves the UI, reverse-proxies the broadcast HTTP API, issues the
-# TLS cert) and the WebTransport broadcast server in one container. Caddy owns
-# the cert; the broadcast server reads it from Caddy's storage.
+# Runs the control server and Caddy in one container: Caddy serves the UI,
+# issues and renews the TLS certificate, and proxies the API to control. When
+# either process exits, the container stops, so the orchestrator's restart
+# policy brings both back together.
 set -eu
 
-HOSTNAME="${ROOMKA_HOSTNAME:?ROOMKA_HOSTNAME is required}"
+: "${ROOMKA_HOSTNAME:?ROOMKA_HOSTNAME is required}"
+: "${ROOMKA_ACME_EMAIL:?ROOMKA_ACME_EMAIL is required}"
 
-# Inject the UI's runtime connection config (window.__ROOMKA_CONFIG__; see
-# services/ui/src/lib/config.ts). The UI learns whether to pin the cert by
-# querying /api/cert-hash, so only the connection endpoint is injected.
-cat >/srv/config.js <<EOF
-window.__ROOMKA_CONFIG__ = {
-  hostname: "${HOSTNAME}",
-  webTransportPort: "${ROOMKA_WEB_TRANSPORT_PORT}",
-}
-EOF
+# The UI is served from the hostname, so that is where the session cookie may
+# come from and what the password links printed to the log point at. Set it
+# only when the app is reached under another address, as behind a further
+# proxy.
+export ROOMKA_PUBLIC_URL="${ROOMKA_PUBLIC_URL:-https://${ROOMKA_HOSTNAME}}"
+# The version the image was built as, the same one the UI shows.
+export ROOMKA_VERSION="${ROOMKA_VERSION:-$(cat /etc/roomka/version)}"
 
-# Caddy issues the cert into this directory (ACME CA pinned in the Caddyfile, so
-# the path is stable). We wait until both files exist, then point the broadcast
-# server at them via ROOMKA_WEB_TRANSPORT_CERT.
-CERT_DIR="/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${HOSTNAME}"
-CERT_FILE="${CERT_DIR}/${HOSTNAME}.crt"
-CERT_KEY_FILE="${CERT_DIR}/${HOSTNAME}.key"
-
+control &
+control_pid=$!
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 caddy_pid=$!
 
-echo "entrypoint: waiting for the TLS certificate for ${HOSTNAME}..."
-tries=0
-while [ ! -s "${CERT_FILE}" ] || [ ! -s "${CERT_KEY_FILE}" ]; do
-	tries=$((tries + 1))
-	if [ "${tries}" -gt 150 ]; then
-		echo "entrypoint: timed out waiting for the certificate" >&2
-		exit 1
-	fi
-	if ! kill -0 "${caddy_pid}" 2>/dev/null; then
-		echo "entrypoint: caddy exited before issuing a certificate" >&2
-		exit 1
-	fi
-	sleep 2
-done
+stop() {
+	kill "${control_pid}" "${caddy_pid}" 2>/dev/null || true
+	wait || true
+}
+# docker stop sends TERM: pass it on rather than sit out the grace period and
+# get killed.
+trap 'stop; exit 0' TERM INT
 
-echo "entrypoint: certificate ready, starting the broadcast server"
-export ROOMKA_WEB_TRANSPORT_CERT="static:${CERT_FILE};${CERT_KEY_FILE}"
-broadcast &
-broadcast_pid=$!
-
-# Stop the container as soon as either process exits.
-while kill -0 "${caddy_pid}" 2>/dev/null && kill -0 "${broadcast_pid}" 2>/dev/null; do
-	sleep 5
+# Sleeping in the background keeps the trap responsive: a signal interrupts
+# `wait`, not a foreground `sleep`.
+while kill -0 "${control_pid}" 2>/dev/null && kill -0 "${caddy_pid}" 2>/dev/null; do
+	sleep 2 &
+	wait $! || true
 done
-echo "entrypoint: a process exited — shutting down" >&2
-kill "${caddy_pid}" "${broadcast_pid}" 2>/dev/null || true
+echo "entrypoint: a process exited, stopping the container" >&2
+stop
 exit 1

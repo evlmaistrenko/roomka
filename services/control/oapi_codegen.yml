@@ -1,0 +1,17 @@
+# oapi-codegen: the REST half of the contract, packages/control-specs/openapi.yaml,
+# generated into rest/ the way gqlgen generates the GraphQL half into graph/.
+# Run from rest/ (go generate), so paths here are relative to it.
+package: rest
+output: generated.go
+generate:
+  models: true
+  # net/http's own ServeMux, which the server already routes with.
+  std-http-server: true
+  # Typed request and response objects per operation, so a handler cannot
+  # answer with a status or a body the spec does not declare.
+  strict-server: true
+  # The spec itself, which the server hands out at /openapi.json.
+  embedded-spec: true
+output-options:
+  # gqlgen owns /graphql; the spec only describes its transport.
+  exclude-tags: [graphql]

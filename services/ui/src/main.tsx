@@ -1,29 +1,64 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
-import { RouterProvider, createMemoryRouter } from "react-router-dom"
+import { Navigate, RouterProvider, createBrowserRouter } from "react-router-dom"
 
-import App from "@/App.tsx"
+import { AdminLayout } from "@/components/admin-layout"
+import { AppLayout } from "@/components/app-layout"
+import { AuthGate } from "@/components/auth-gate"
+import { AuthProvider } from "@/components/auth-provider"
 import { ThemeProvider } from "@/components/theme-provider"
-import { loadSettings } from "@/lib/settings"
-import { ImportSettings } from "@/pages/import-settings"
+import "@/lib/i18n"
+import { ForgotPasswordPage } from "@/pages/forgot-password"
+import { HomePage } from "@/pages/home"
+import { NotFoundPage } from "@/pages/not-found"
+import { SetPasswordPage } from "@/pages/set-password"
+import { SettingsPage } from "@/pages/settings"
+import { UsersPage } from "@/pages/users"
 
 import "./index.css"
 
-// In-memory routing (the URL never changes): on startup show the settings
-// import page unless a valid settings file was already imported (persisted in
-// localStorage).
-const router = createMemoryRouter(
-	[
-		{ path: "/", element: <App /> },
-		{ path: "/import", element: <ImportSettings /> },
-	],
-	{ initialEntries: [loadSettings() ? "/" : "/import"] },
-)
+// Pages that need a session sit behind AuthGate. A page for visitors without
+// one goes next to it rather than under it.
+const router = createBrowserRouter([
+	{ path: "set-password", element: <SetPasswordPage /> },
+	{ path: "forgot-password", element: <ForgotPasswordPage /> },
+	{
+		element: <AuthGate />,
+		children: [
+			{
+				element: <AppLayout />,
+				children: [
+					{ index: true, element: <HomePage /> },
+					{
+						path: "admin",
+						element: <AdminLayout />,
+						children: [
+							{
+								index: true,
+								element: (
+									<Navigate
+										to="users"
+										replace
+									/>
+								),
+							},
+							{ path: "users", element: <UsersPage /> },
+						],
+					},
+					{ path: "settings", element: <SettingsPage /> },
+					{ path: "*", element: <NotFoundPage /> },
+				],
+			},
+		],
+	},
+])
 
 createRoot(document.getElementById("root")!).render(
 	<StrictMode>
 		<ThemeProvider>
-			<RouterProvider router={router} />
+			<AuthProvider>
+				<RouterProvider router={router} />
+			</AuthProvider>
 		</ThemeProvider>
 	</StrictMode>,
 )

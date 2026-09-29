@@ -22,21 +22,23 @@ export default defineConfig(({ mode }) => {
 		define: {
 			__APP_VERSION__: JSON.stringify(version),
 		},
-		// Expose only the two non-secret connection values to the client bundle —
-		// whitelisted by exact name so nothing else in the ROOMKA_ namespace
-		// (notably ROOMKA_ACCESS_SECRET) reaches import.meta.env.
-		envPrefix: ["VITE_", "ROOMKA_HOSTNAME", "ROOMKA_WEB_TRANSPORT_PORT"],
 		resolve: {
 			alias: {
 				"@": path.resolve(import.meta.dirname, "./src"),
 			},
 		},
 		server: {
-			// Reach the broadcast HTTP API same-origin, mirroring Caddy in the
-			// container. ROOMKA_API_PORT is read here at config time only (loadEnv),
-			// never exposed to the bundle.
+			// Reach the control server same-origin, as the reverse proxy does in
+			// production: the session cookie is SameSite=Strict, and the server
+			// checks Origin against ROOMKA_PUBLIC_URL, which is this dev server.
+			// ROOMKA_API_PORT is read here at config time only (loadEnv), never
+			// exposed to the bundle.
 			proxy: {
-				"/api": `http://localhost:${env.ROOMKA_API_PORT}`,
+				"/graphql": {
+					target: `http://localhost:${env.ROOMKA_API_PORT}`,
+					// Subscriptions run over a WebSocket on the same path.
+					ws: true,
+				},
 			},
 		},
 	}

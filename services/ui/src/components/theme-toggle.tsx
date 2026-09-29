@@ -1,4 +1,5 @@
 import { Monitor, Moon, Sun } from "lucide-react"
+import { useTranslation } from "react-i18next"
 
 import type { Theme } from "@/components/theme-context"
 import { Button } from "@/components/ui/button"
@@ -12,6 +13,7 @@ const icons: Record<Theme, typeof Monitor> = {
 }
 
 export function ThemeToggle() {
+	const { t } = useTranslation()
 	const { theme, setTheme } = useTheme()
 	const Icon = icons[theme]
 	const next = order[(order.indexOf(theme) + 1) % order.length]
@@ -21,8 +23,11 @@ export function ThemeToggle() {
 			variant="ghost"
 			size="icon"
 			onClick={() => setTheme(next)}
-			title={`Theme: ${theme}`}
-			aria-label={`Theme: ${theme}, switch to ${next}`}
+			title={t("theme.current", { theme: t(`theme.${theme}`) })}
+			aria-label={t("theme.switch", {
+				theme: t(`theme.${theme}`),
+				next: t(`theme.${next}`),
+			})}
 		>
 			<Icon />
 		</Button>
