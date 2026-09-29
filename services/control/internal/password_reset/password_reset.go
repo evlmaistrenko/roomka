@@ -1,18 +1,23 @@
 // Package passwordreset issues and verifies the secret that lets somebody set a
 // password without having one — a first sign-in, or a forgotten password.
 //
-// The secret is never stored. It is a signature over the user's id, the moment
-// it was issued, and the password hash in force at that moment; the user row
-// keeps only the issue time. Two properties fall out of that for free: a secret
-// stops working the moment it is used, because using it changes the hash it was
-// signed against, and issuing a new one invalidates the old, because the stored
-// issue time no longer matches.
+// The secret is random, and the user row keeps only a hash of it, taken
+// together with the password hash in force when it was issued, and the issue
+// time. The secret itself is never stored, and nothing signs it, so there is no
+// key that could forge one. Three properties fall out of the hash for free:
+//
+//   - a secret stops working the moment it is used, because using it changes
+//     the password hash it was taken against;
+//   - it stops working the same way when the password changes by any other
+//     path, such as changePassword or an administrator's reset;
+//   - issuing a new one invalidates the old, because it overwrites the hash.
 package passwordreset
 
 import (
 	"context"
-	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -30,6 +35,10 @@ import (
 // whole credential while it lives: anyone holding it can claim the account.
 const TTL = 15 * time.Minute
 
+// secretBytes is the randomness in a secret: as much as a session's, since the
+// secret opens the account as surely as a session does.
+const secretBytes = 32
+
 // ErrInvalid covers every way a secret can fail — malformed, unknown user,
 // superseded, already used, expired. The holder of a dead link can do nothing
 // differently with a more specific answer, and a specific answer would confirm
@@ -44,16 +53,17 @@ type Info struct {
 	ExpiresAt time.Time
 }
 
-// Issue records a fresh issue time on the user and returns the secret signed
-// against it. Any secret issued earlier stops working.
-func Issue(ctx context.Context, store *database.Database, key string, userID int64) (string, time.Time, error) {
-	// Truncated to the second because that is the resolution the secret carries
-	// in its payload; signing a more precise time than it can hold would make
-	// every secret fail verification.
-	issuedAt := time.Now().UTC().Truncate(time.Second)
+// Issue gives the user a fresh secret and returns it. Any secret issued
+// earlier stops working.
+func Issue(ctx context.Context, store *database.Database, userID int64) (string, time.Time, error) {
+	random, err := randomPart()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	issuedAt := time.Now().UTC()
 
-	var passwordHash string
-	err := store.RunInTx(ctx, nil, func(ctx context.Context, transaction bun.Tx) error {
+	err = store.RunInTx(ctx, nil, func(ctx context.Context, transaction bun.Tx) error {
+		var passwordHash string
 		if err := transaction.NewSelect().
 			Model((*model.User)(nil)).
 			Column("password_hash").
@@ -63,8 +73,9 @@ func Issue(ctx context.Context, store *database.Database, key string, userID int
 		}
 		_, err := transaction.NewUpdate().
 			Model((*model.User)(nil)).
+			Set("password_reset_hash = ?", hash(random, passwordHash)).
 			Set("password_reset_issued_at = ?", issuedAt).
-			Set("updated_at = ?", time.Now().UTC()).
+			Set("updated_at = ?", issuedAt).
 			Where("id = ?", userID).
 			Exec(ctx)
 		return err
@@ -72,12 +83,12 @@ func Issue(ctx context.Context, store *database.Database, key string, userID int
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	return format(userID, issuedAt, passwordHash, key), issuedAt.Add(TTL), nil
+	return format(userID, random), issuedAt.Add(TTL), nil
 }
 
 // Verify checks a secret and reports which account it opens.
-func Verify(ctx context.Context, store *database.Database, key, secret string) (Info, error) {
-	userID, issuedAt, signature, err := parse(secret)
+func Verify(ctx context.Context, store *database.Database, secret string) (Info, error) {
+	userID, random, err := parse(secret)
 	if err != nil {
 		return Info{}, err
 	}
@@ -85,7 +96,7 @@ func Verify(ctx context.Context, store *database.Database, key, secret string) (
 	var user model.User
 	err = store.NewSelect().
 		Model(&user).
-		Column("username", "password_hash", "password_reset_issued_at").
+		Column("username", "password_hash", "password_reset_hash", "password_reset_issued_at").
 		Where("id = ?", userID).
 		Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -94,75 +105,67 @@ func Verify(ctx context.Context, store *database.Database, key, secret string) (
 	if err != nil {
 		return Info{}, err
 	}
-	// A secret whose issue time is not the one on the row was superseded by a
-	// later request, or was already used — setPassword clears the column.
-	if user.PasswordResetIssuedAt.IsZero() || !user.PasswordResetIssuedAt.Equal(issuedAt) {
+	// No hash on the row: none was issued, or the last one was redeemed or
+	// cleared. A hash that does not match: another secret replaced this one,
+	// or the password changed since it was issued.
+	if user.PasswordResetHash == "" ||
+		subtle.ConstantTimeCompare([]byte(user.PasswordResetHash), []byte(hash(random, user.PasswordHash))) != 1 {
 		return Info{}, ErrInvalid
 	}
-	if !hmac.Equal([]byte(signature), []byte(sign(userID, issuedAt, user.PasswordHash, key))) {
-		return Info{}, ErrInvalid
-	}
-	expiresAt := issuedAt.Add(TTL)
+	expiresAt := user.PasswordResetIssuedAt.Add(TTL)
 	if !time.Now().UTC().Before(expiresAt) {
 		return Info{}, ErrInvalid
 	}
 	return Info{UserID: userID, Username: user.Username, ExpiresAt: expiresAt}, nil
 }
 
-// Clear drops the issue time, which retires the secret ahead of its expiry.
+// Clear retires the outstanding secret, if any, ahead of its expiry. Setting a
+// password would retire it anyway; clearing also drops the issue time, which
+// stops passwordResetInfo describing a secret that no longer works.
 func Clear(ctx context.Context, store *database.Database, userID int64) error {
 	_, err := store.NewUpdate().
 		Model((*model.User)(nil)).
+		Set("password_reset_hash = NULL").
 		Set("password_reset_issued_at = NULL").
 		Where("id = ?", userID).
 		Exec(ctx)
 	return err
 }
 
-// format renders the secret as "<payload>.<signature>", both base64url so the
-// whole thing survives a URL, a console and a copy-paste unchanged.
-func format(userID int64, issuedAt time.Time, passwordHash, key string) string {
-	return encode(payload(userID, issuedAt)) + "." + sign(userID, issuedAt, passwordHash, key)
+// format renders the secret as "<user id>.<random>". The id tells Verify which
+// row to compare against; on its own it opens nothing. Both parts survive a
+// URL fragment, a console and a copy-paste unchanged.
+func format(userID int64, random string) string {
+	return strconv.FormatInt(userID, 10) + "." + random
 }
 
-// payload is the part of the secret the server reads back out of it.
-func payload(userID int64, issuedAt time.Time) string {
-	return strconv.FormatInt(userID, 10) + "." + strconv.FormatInt(issuedAt.Unix(), 10)
-}
-
-// sign covers the payload and the password hash in force when it was issued.
-func sign(userID int64, issuedAt time.Time, passwordHash, key string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(payload(userID, issuedAt)))
-	mac.Write([]byte{0})
-	mac.Write([]byte(passwordHash))
-	return encode(string(mac.Sum(nil)))
-}
-
-func parse(secret string) (int64, time.Time, string, error) {
-	encodedPayload, signature, ok := strings.Cut(secret, ".")
-	if !ok {
-		return 0, time.Time{}, "", ErrInvalid
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(encodedPayload)
-	if err != nil {
-		return 0, time.Time{}, "", ErrInvalid
-	}
-	userIDText, issuedAtText, ok := strings.Cut(string(decoded), ".")
-	if !ok {
-		return 0, time.Time{}, "", ErrInvalid
+func parse(secret string) (int64, string, error) {
+	userIDText, random, ok := strings.Cut(secret, ".")
+	if !ok || random == "" {
+		return 0, "", ErrInvalid
 	}
 	userID, err := strconv.ParseInt(userIDText, 10, 64)
 	if err != nil {
-		return 0, time.Time{}, "", ErrInvalid
+		return 0, "", ErrInvalid
 	}
-	seconds, err := strconv.ParseInt(issuedAtText, 10, 64)
-	if err != nil {
-		return 0, time.Time{}, "", ErrInvalid
-	}
-	return userID, time.Unix(seconds, 0).UTC(), signature, nil
+	return userID, random, nil
 }
 
-func encode(value string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(value))
+func randomPart() (string, error) {
+	buffer := make([]byte, secretBytes)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buffer), nil
+}
+
+// hash is what the row keeps: the random part together with the password hash
+// in force. A plain sha256 is enough, unlike for a password: the input carries
+// 256 random bits, so there is nothing to guess even offline.
+func hash(random, passwordHash string) string {
+	digest := sha256.New()
+	digest.Write([]byte(random))
+	digest.Write([]byte{0})
+	digest.Write([]byte(passwordHash))
+	return base64.RawURLEncoding.EncodeToString(digest.Sum(nil))
 }

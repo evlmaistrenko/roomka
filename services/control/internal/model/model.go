@@ -39,9 +39,10 @@ func All() []any {
 //
 // PasswordHash is empty until somebody redeems a reset secret, which is the
 // normal state of a freshly created account; PasswordSetAt answers "was this row
-// ever used". PasswordResetIssuedAt is the only trace of a reset secret: the
-// secret itself is never stored, it is re-derived from (id, that time, the
-// password hash), so redeeming one invalidates it.
+// ever used". A reset secret leaves two traces: PasswordResetHash, a hash of it
+// taken together with the password hash in force when it was issued, so that
+// setting a password by any path invalidates it; and PasswordResetIssuedAt, which
+// dates it. The secret itself is never stored.
 type User struct {
 	bun.BaseModel `bun:"table:users,alias:user"`
 
@@ -52,6 +53,7 @@ type User struct {
 	// Rank is who this user may act on: strictly lower ranks, and nobody else.
 	Rank                  int       `bun:"rank,notnull"`
 	PasswordSetAt         time.Time `bun:"password_set_at,nullzero"`
+	PasswordResetHash     string    `bun:"password_reset_hash,nullzero"`
 	PasswordResetIssuedAt time.Time `bun:"password_reset_issued_at,nullzero"`
 	CreatedAt             time.Time `bun:"created_at,notnull"`
 	UpdatedAt             time.Time `bun:"updated_at,notnull"`

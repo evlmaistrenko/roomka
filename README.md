@@ -26,7 +26,6 @@ its ports itself.
 | -------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
 | `ROOMKA_HOSTNAME`                      | yes      | The domain the app is served at; Caddy gets its certificate                                        |
 | `ROOMKA_ACME_EMAIL`                    | yes      | Contact for the certificate authority                                                              |
-| `ROOMKA_SESSION_SECRET`                | yes      | Key that signs password links: a long random value. Changing it voids every outstanding link       |
 | `ROOMKA_PUBLIC_URL`                    | no       | Where the UI is reached, `https://$ROOMKA_HOSTNAME` unless set. Set it only behind a further proxy |
 | `ROOMKA_DISABLE_GRAPHQL_INTROSPECTION` | no       | `true` turns introspection off                                                                     |
 
@@ -34,7 +33,12 @@ its ports itself.
 mount it, or both are lost with the container.
 
 ```sh
-docker run -d   -p 80:80 -p 443:443 -p 443:443/udp   -e ROOMKA_HOSTNAME=panel.example.com   -e ROOMKA_ACME_EMAIL=you@example.com   -e ROOMKA_SESSION_SECRET=change-me-to-a-long-random-secret   -v "$(pwd)/data:/data"   evlmaistrenko/roomka:latest
+docker run -d \
+  -p 80:80 -p 443:443 -p 443:443/udp \
+  -e ROOMKA_HOSTNAME=panel.example.com \
+  -e ROOMKA_ACME_EMAIL=you@example.com \
+  -v "$(pwd)/data:/data" \
+  evlmaistrenko/roomka:latest
 ```
 
 Or with Compose:
@@ -51,7 +55,6 @@ services:
     environment:
       ROOMKA_HOSTNAME: panel.example.com
       ROOMKA_ACME_EMAIL: you@example.com
-      ROOMKA_SESSION_SECRET: change-me-to-a-long-random-secret
     volumes:
       - ./data:/data
 ```

@@ -241,7 +241,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, username string) (*s
 
 // issuePasswordReset mints a secret and prints the link that redeems it.
 func (s *Service) issuePasswordReset(ctx context.Context, userID int64, username string) error {
-	secret, expiresAt, err := passwordreset.Issue(ctx, s.database, s.config.SessionSecret, userID)
+	secret, expiresAt, err := passwordreset.Issue(ctx, s.database, userID)
 	if err != nil {
 		return err
 	}
@@ -261,7 +261,7 @@ func (s *Service) passwordResetLink(secret string) string {
 // the form can name the account before a password is typed into it. A secret
 // that is not valid is not an error — the link is simply no longer a link.
 func (s *Service) PasswordResetInfo(ctx context.Context, secret string) (*schema.PasswordResetInfo, error) {
-	info, err := passwordreset.Verify(ctx, s.database, s.config.SessionSecret, secret)
+	info, err := passwordreset.Verify(ctx, s.database, secret)
 	if errors.Is(err, passwordreset.ErrInvalid) {
 		return nil, nil
 	}
@@ -274,7 +274,7 @@ func (s *Service) PasswordResetInfo(ctx context.Context, secret string) (*schema
 // setPassword redeems a reset secret. Every session the account had ends: the
 // secret is used precisely when nobody is sure who else is holding the account.
 func (s *Service) SetPassword(ctx context.Context, secret string, input schema.SetPasswordInput) (*schema.Viewer, error) {
-	info, err := passwordreset.Verify(ctx, s.database, s.config.SessionSecret, secret)
+	info, err := passwordreset.Verify(ctx, s.database, secret)
 	if errors.Is(err, passwordreset.ErrInvalid) {
 		return nil, schema.InvalidInput(schema.InvalidInputReasonTargetMissing, []string{"secret"},
 			"this password reset secret is no longer valid")
@@ -288,9 +288,8 @@ func (s *Service) SetPassword(ctx context.Context, secret string, input schema.S
 	if err := s.writePassword(ctx, info.UserID, input.Password); err != nil {
 		return nil, err
 	}
-	// Clearing the issue time is belt and braces: the new password hash already
-	// invalidates the signature. It also stops passwordResetInfo from describing
-	// a secret that no longer works.
+	// Clearing is belt and braces: the new password hash already invalidates
+	// the stored one. It also drops the issue time with it.
 	if err := passwordreset.Clear(ctx, s.database, info.UserID); err != nil {
 		return nil, err
 	}

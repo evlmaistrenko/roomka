@@ -17,11 +17,10 @@ import (
 
 // Config holds every runtime parameter of the control server.
 type Config struct {
-	APIPort       string // ROOMKA_API_PORT: HTTP/GraphQL bind port
-	DatabasePath  string // ROOMKA_DATABASE_PATH: sqlite file path
-	PublicURL     string // ROOMKA_PUBLIC_URL: base URL the UI is served from; the only Origin allowed to send the session cookie
-	SessionSecret string // ROOMKA_SESSION_SECRET: HMAC key signing password reset secrets
-	Version       string // ROOMKA_VERSION: reported by Query.version; "dev" when unset
+	APIPort      string // ROOMKA_API_PORT: HTTP/GraphQL bind port
+	DatabasePath string // ROOMKA_DATABASE_PATH: sqlite file path
+	PublicURL    string // ROOMKA_PUBLIC_URL: base URL the UI is served from; the only Origin allowed to send the session cookie
+	Version      string // ROOMKA_VERSION: reported by Query.version; "dev" when unset
 	// ROOMKA_DISABLE_GRAPHQL_INTROSPECTION: turns introspection off on every
 	// transport, which a proxy cannot do (a query over the subscription socket
 	// never shows it one). Phrased as a disable so that the zero value, and so
@@ -44,10 +43,9 @@ func Load() Config {
 		return value
 	}
 	configuration := Config{
-		APIPort:       get("ROOMKA_API_PORT"),
-		DatabasePath:  get("ROOMKA_DATABASE_PATH"),
-		PublicURL:     get("ROOMKA_PUBLIC_URL"),
-		SessionSecret: get("ROOMKA_SESSION_SECRET"),
+		APIPort:      get("ROOMKA_API_PORT"),
+		DatabasePath: get("ROOMKA_DATABASE_PATH"),
+		PublicURL:    get("ROOMKA_PUBLIC_URL"),
 		// Version is optional, so it bypasses the required-variable check: the
 		// release build stamps it, and anything else is a development build.
 		Version: cmp.Or(os.Getenv("ROOMKA_VERSION"), "dev"),

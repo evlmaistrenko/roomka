@@ -83,11 +83,10 @@ func newHarness(t *testing.T, options ...func(*config.Config)) *harness {
 	publicURL := "https://" + testServer.Listener.Addr().String()
 
 	configuration := config.Config{
-		DatabasePath:  filepath.Join(dir, "test.db"),
-		PublicURL:     publicURL,
-		SessionSecret: "test-session-secret",
-		Version:       "test-version",
-		Limits:        ratelimit.DefaultPolicy(),
+		DatabasePath: filepath.Join(dir, "test.db"),
+		PublicURL:    publicURL,
+		Version:      "test-version",
+		Limits:       ratelimit.DefaultPolicy(),
 	}
 	for _, option := range options {
 		option(&configuration)

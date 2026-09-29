@@ -340,8 +340,10 @@ person who watches a stream is a `Reader`, never a viewer.
 - **Timestamps are UTC, written by the server through bun.** Never use a SQL
   `DEFAULT` for time: two writers in two formats compare wrongly.
 - **Secrets are never stored in the clear.** A session cookie is a random
-  secret, and only its sha256 is stored. Password reset secrets are
-  HMAC-signed and not stored at all. Passwords are argon2id at OWASP's minimum
+  secret, and only its sha256 is stored. A password reset secret is random
+  too, and only a sha256 of it together with the password hash in force is
+  stored, so setting a password by any path retires it. No key signs either:
+  there is nothing that could forge one. Passwords are argon2id at OWASP's minimum
   parameters: the cost is for the day the database leaks, when guessing is
   offline and no rate limit applies.
 - **Every limit is in `ratelimit.Policy`.** The numbers sit side by side in

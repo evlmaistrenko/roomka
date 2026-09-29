@@ -33,8 +33,8 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 # What the image fixes itself. /data is the Caddy image's volume, holding the
 # certificates already; the database goes next to them so one volume keeps
-# everything. The runtime supplies the rest: ROOMKA_HOSTNAME,
-# ROOMKA_ACME_EMAIL, ROOMKA_SESSION_SECRET (see the README).
+# everything. The runtime supplies the rest, ROOMKA_HOSTNAME and
+# ROOMKA_ACME_EMAIL (see the README).
 ENV ROOMKA_API_PORT=8080 \
     ROOMKA_DATABASE_PATH=/data/roomka/roomka.db
 # 80: the ACME HTTP challenge and the redirect to https. 443/tcp: HTTP/1.1 and

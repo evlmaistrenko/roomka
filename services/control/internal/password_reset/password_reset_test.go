@@ -12,8 +12,6 @@ import (
 	"control/internal/model"
 )
 
-const key = "test-signing-key"
-
 func newStore(t *testing.T) *database.Database {
 	t.Helper()
 	// os.MkdirTemp with best-effort cleanup rather than t.TempDir: on Windows the
@@ -33,12 +31,12 @@ func newStore(t *testing.T) *database.Database {
 	return store
 }
 
-func newUser(t *testing.T, store *database.Database, passwordHash string) int64 {
+func newUser(t *testing.T, store *database.Database, username, passwordHash string) int64 {
 	t.Helper()
 	now := time.Now().UTC()
 	user := &model.User{
-		Username:     "quentin",
-		DisplayName:  "Quentin",
+		Username:     username,
+		DisplayName:  username,
 		PasswordHash: passwordHash,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -51,9 +49,9 @@ func newUser(t *testing.T, store *database.Database, passwordHash string) int64 
 
 func TestVerifyAcceptsAFreshSecret(t *testing.T) {
 	store := newStore(t)
-	userID := newUser(t, store, "")
+	userID := newUser(t, store, "quentin", "")
 
-	secret, expiresAt, err := Issue(context.Background(), store, key, userID)
+	secret, expiresAt, err := Issue(context.Background(), store, userID)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -61,7 +59,7 @@ func TestVerifyAcceptsAFreshSecret(t *testing.T) {
 		t.Errorf("expiry is %s away, want at most the %s term", remaining, TTL)
 	}
 
-	info, err := Verify(context.Background(), store, key, secret)
+	info, err := Verify(context.Background(), store, secret)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -70,102 +68,110 @@ func TestVerifyAcceptsAFreshSecret(t *testing.T) {
 	}
 }
 
-func TestVerifyRejectsWhatItShould(t *testing.T) {
+// TestTheSecretIsNotStored pins what the row keeps: a hash, never something
+// a copy of the database could be used as.
+func TestTheSecretIsNotStored(t *testing.T) {
 	store := newStore(t)
-	userID := newUser(t, store, "original-hash")
+	userID := newUser(t, store, "quentin", "")
 
-	valid, _, err := Issue(context.Background(), store, key, userID)
+	secret, _, err := Issue(context.Background(), store, userID)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	issuedAt := storedIssue(t, store, userID)
+	_, random, err := parse(secret)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	stored := read(t, store, userID)
+	if stored.PasswordResetHash == "" || stored.PasswordResetHash == random || stored.PasswordResetHash == secret {
+		t.Errorf("row keeps %q for secret %q, want a hash of it", stored.PasswordResetHash, secret)
+	}
+}
+
+func TestVerifyRejectsWhatItShould(t *testing.T) {
+	store := newStore(t)
+	userID := newUser(t, store, "quentin", "original-hash")
+	otherID := newUser(t, store, "rachel", "original-hash")
+
+	valid, _, err := Issue(context.Background(), store, userID)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	_, random, err := parse(valid)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	issued := read(t, store, userID)
 
 	cases := map[string]func(t *testing.T) string{
 		"nonsense": func(*testing.T) string {
 			return "not-a-secret"
 		},
-		"a signature from another key": func(*testing.T) string {
-			return format(userID, issuedAt, "original-hash", "some-other-key")
+		"a guessed random part": func(*testing.T) string {
+			guessed, err := randomPart()
+			if err != nil {
+				t.Fatalf("random: %v", err)
+			}
+			return format(userID, guessed)
 		},
-		"a payload naming another user": func(*testing.T) string {
-			return format(userID+1, issuedAt, "original-hash", key)
+		"the right random part under another user's id": func(*testing.T) string {
+			return format(otherID, random)
 		},
 		"a secret older than its term": func(t *testing.T) string {
-			// Both halves are moved together — the stored issue time and the
-			// time the secret is signed for — so nothing but the age is wrong.
-			old := time.Now().UTC().Add(-TTL - time.Minute).Truncate(time.Second)
-			setIssue(t, store, userID, old)
-			return format(userID, old, "original-hash", key)
+			update(t, store, userID, "password_reset_issued_at = ?", time.Now().UTC().Add(-TTL-time.Minute))
+			return valid
 		},
 		"a secret superseded by a later request": func(t *testing.T) string {
-			earlier := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
-			setIssue(t, store, userID, earlier)
-			superseded := format(userID, earlier, "original-hash", key)
-			if _, _, err := Issue(context.Background(), store, key, userID); err != nil {
+			if _, _, err := Issue(context.Background(), store, userID); err != nil {
 				t.Fatalf("re-issue: %v", err)
 			}
-			return superseded
+			return valid
 		},
-		"a secret signed against a password since changed": func(t *testing.T) string {
-			secret := format(userID, storedIssue(t, store, userID), "original-hash", key)
+		"a secret issued before the password changed": func(t *testing.T) string {
 			update(t, store, userID, "password_hash = ?", "new-hash")
-			return secret
+			return valid
+		},
+		"a cleared secret": func(t *testing.T) string {
+			if err := Clear(context.Background(), store, userID); err != nil {
+				t.Fatalf("clear: %v", err)
+			}
+			return valid
 		},
 	}
 	for name, build := range cases {
 		t.Run(name, func(t *testing.T) {
 			// Each case starts from a known-good state, so that the case before
 			// it cannot be the reason this one fails.
-			reset(t, store, userID, issuedAt)
-			if _, err := Verify(context.Background(), store, key, valid); err != nil {
+			restore(t, store, userID, issued)
+			if _, err := Verify(context.Background(), store, valid); err != nil {
 				t.Fatalf("the known-good secret stopped working: %v", err)
 			}
 
-			if _, err := Verify(context.Background(), store, key, build(t)); !errors.Is(err, ErrInvalid) {
+			if _, err := Verify(context.Background(), store, build(t)); !errors.Is(err, ErrInvalid) {
 				t.Errorf("err = %v, want ErrInvalid", err)
 			}
 		})
 	}
 }
 
-func TestClearRetiresAnOutstandingSecret(t *testing.T) {
-	store := newStore(t)
-	userID := newUser(t, store, "")
-
-	secret, _, err := Issue(context.Background(), store, key, userID)
-	if err != nil {
-		t.Fatalf("issue: %v", err)
-	}
-	if err := Clear(context.Background(), store, userID); err != nil {
-		t.Fatalf("clear: %v", err)
-	}
-	if _, err := Verify(context.Background(), store, key, secret); !errors.Is(err, ErrInvalid) {
-		t.Errorf("err = %v, want ErrInvalid", err)
-	}
-}
-
-func storedIssue(t *testing.T, store *database.Database, userID int64) time.Time {
+func read(t *testing.T, store *database.Database, userID int64) model.User {
 	t.Helper()
-	var issuedAt time.Time
+	var user model.User
 	if err := store.NewSelect().
-		Model((*model.User)(nil)).
-		Column("password_reset_issued_at").
+		Model(&user).
+		Column("password_hash", "password_reset_hash", "password_reset_issued_at").
 		Where("id = ?", userID).
-		Scan(context.Background(), &issuedAt); err != nil {
-		t.Fatalf("read issue time: %v", err)
+		Scan(context.Background()); err != nil {
+		t.Fatalf("read user: %v", err)
 	}
-	return issuedAt
+	return user
 }
 
-func setIssue(t *testing.T, store *database.Database, userID int64, at time.Time) {
+func restore(t *testing.T, store *database.Database, userID int64, user model.User) {
 	t.Helper()
-	update(t, store, userID, "password_reset_issued_at = ?", at)
-}
-
-func reset(t *testing.T, store *database.Database, userID int64, issuedAt time.Time) {
-	t.Helper()
-	update(t, store, userID, "password_hash = ?", "original-hash")
-	update(t, store, userID, "password_reset_issued_at = ?", issuedAt)
+	update(t, store, userID, "password_hash = ?", user.PasswordHash)
+	update(t, store, userID, "password_reset_hash = ?", user.PasswordResetHash)
+	update(t, store, userID, "password_reset_issued_at = ?", user.PasswordResetIssuedAt)
 }
 
 // update writes one column, through bun like the code under test, so that a
