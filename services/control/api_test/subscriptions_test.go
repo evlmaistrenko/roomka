@@ -313,6 +313,24 @@ func TestResubscribingOnAnEndedSessionFails(t *testing.T) {
 	}
 }
 
+// TestSocketSeesAStepUpMadeOverHTTP is the same re-read seen from the other
+// side: the socket opened before the password was proved, and an operation on
+// it afterwards counts the proof, rather than the step-up state of the
+// handshake.
+func TestSocketSeesAStepUpMadeOverHTTP(t *testing.T) {
+	harness := newHarness(t)
+	root := harness.signUp()
+	harness.lapseStepUp()
+	connection := root.mustConnect()
+
+	expectOK(t, root.post(`mutation S($input: StepUpInput!) { stepUp(input: $input) { session { id } } }`,
+		variables("input", map[string]any{"password": rootPassword})))
+
+	connection.subscribe("1", `mutation C($input: CreateUserInput!) { createUser(input: $input) { id } }`,
+		variables("input", map[string]any{"username": "newcomer", "displayName": "Newcomer", "rank": 1}))
+	expectOK(t, connection.await("1").data(t))
+}
+
 // TestQuietSocketIsPinged covers a socket with nothing to report: something
 // still has to cross it, or whatever sits in the path with an idle timeout cuts
 // it. The deadline is the shortest such timeout seen in practice.
